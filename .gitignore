@@ -1,0 +1,33 @@
+# 依赖
+node_modules/
+.pnpm-store/
+
+# 测试产物与临时目录
+test/last-regression.json
+test/.ecosystem/
+test/ground-truth/out/
+*.log
+*.tmp
+coverage/
+.nyc_output/
+
+# 本地验证/实验产物（不进仓库）
+.verify/
+poc/_out/
+*.jsonl
+*.jsonl.*
+
+# 编辑器 / 系统
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# 敏感：绝不提交
+.env
+.env.*
+*.pem
+*.key
+.credentials.yaml
+credentials*.yml

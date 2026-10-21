@@ -1,0 +1,14 @@
+# 跨平台换行统一：源码一律 LF，避免 Windows 检出时整库 CRLF 造成无意义 diff
+* text=auto eol=lf
+
+# 明确二进制
+*.png binary
+*.jpg binary
+*.webp binary
+*.gif binary
+*.zip binary
+
+# Windows 脚本保留 CRLF
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf

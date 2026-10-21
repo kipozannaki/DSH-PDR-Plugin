@@ -1,0 +1,694 @@
+{
+  "generatedAt": "2026-10-21T06:31:08.010Z",
+  "note": "合成标注集：行为模板 × 导入方式矩阵；外联目标为 RFC 5737 TEST-NET 保留地址（零外逸）",
+  "samples": [
+    {
+      "id": "r01",
+      "kind": "redline",
+      "template": "cred+exfilHttp",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r02",
+      "kind": "redline",
+      "template": "cred+exfilHttp",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r03",
+      "kind": "redline",
+      "template": "cred+exfilHttp",
+      "importStyle": "require",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r04",
+      "kind": "redline",
+      "template": "cred+exfilHttp",
+      "importStyle": "namespace",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r05",
+      "kind": "redline",
+      "template": "cred+exfilHttps",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network"
+          ],
+          "redLines": [
+            "credentials+network"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+network"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r06",
+      "kind": "redline",
+      "template": "cred+exfilHttps",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network"
+          ],
+          "redLines": [
+            "credentials+network"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+network"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r07",
+      "kind": "redline",
+      "template": "cred+exec",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "subprocess"
+          ],
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r08",
+      "kind": "redline",
+      "template": "cred+exec",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "subprocess"
+          ],
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r09",
+      "kind": "redline",
+      "template": "cred+spawn",
+      "importStyle": "require",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "subprocess"
+          ],
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r10",
+      "kind": "redline",
+      "template": "cred+spawn",
+      "importStyle": "namespace",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "subprocess"
+          ],
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+subprocess"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r11",
+      "kind": "redline",
+      "template": "delayed(cred+exfilHttp)",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r12",
+      "kind": "redline",
+      "template": "callback(cred+exfilHttp)",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r13",
+      "kind": "redline",
+      "template": "helperChain(cred+exfilHttps)",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network"
+          ],
+          "redLines": [
+            "credentials+network"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+network"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r14",
+      "kind": "redline",
+      "template": "dynamicEval(cred)+exfilHttp",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "dynamic-code+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r15",
+      "kind": "redline",
+      "template": "cred+exec+exfilHttp",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http",
+            "subprocess"
+          ],
+          "redLines": [
+            "credentials+network",
+            "credentials+subprocess",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "credentials+subprocess",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r16",
+      "kind": "redline",
+      "template": "cred+exfilHttps",
+      "importStyle": "require",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network"
+          ],
+          "redLines": [
+            "credentials+network"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+network"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r17",
+      "kind": "redline",
+      "template": "cleartextExfilOnly",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r18",
+      "kind": "redline",
+      "template": "dynamicEval(cred)+exfilHttp",
+      "importStyle": "require",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http"
+          ],
+          "redLines": [
+            "credentials+network",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "dynamic-code+network",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r19",
+      "kind": "redline",
+      "template": "cred+exfilHttps(async)",
+      "importStyle": "namespace",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network"
+          ],
+          "redLines": [
+            "credentials+network"
+          ]
+        },
+        "static": {
+          "verdict": "WARN",
+          "redLines": [
+            "credentials+network"
+          ]
+        }
+      }
+    },
+    {
+      "id": "r20",
+      "kind": "redline",
+      "template": "credInSpawnArgs+exfilHttp",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access",
+            "network",
+            "cleartext-http",
+            "subprocess"
+          ],
+          "redLines": [
+            "credentials+network",
+            "credentials+subprocess",
+            "cleartext-http"
+          ]
+        },
+        "static": {
+          "verdict": "BLOCK",
+          "redLines": [
+            "credentials+network",
+            "credentials+subprocess",
+            "cleartext-http"
+          ]
+        }
+      }
+    },
+    {
+      "id": "b01",
+      "kind": "benign",
+      "template": "localFsOnly",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b02",
+      "kind": "benign",
+      "template": "httpsApiGet",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "network"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b03",
+      "kind": "benign",
+      "template": "writeOwnCache",
+      "importStyle": "require",
+      "expected": {
+        "runtime": {
+          "flags": [],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b04",
+      "kind": "benign",
+      "template": "subprocessEchoOnly",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "subprocess"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b05",
+      "kind": "benign",
+      "template": "localhostHttpFetch",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "network"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b06",
+      "kind": "benign",
+      "template": "readOwn+httpsApi",
+      "importStyle": "namespace",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "network"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b07",
+      "kind": "benign",
+      "template": "subprocessVersionCheck",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "subprocess"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b08",
+      "kind": "benign",
+      "template": "fsWrite+fsRead own",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b09",
+      "kind": "benign",
+      "template": "httpsApiGet delayed",
+      "importStyle": "named",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "network"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "b10",
+      "kind": "benign",
+      "template": "no-io",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    },
+    {
+      "id": "e01",
+      "kind": "observe",
+      "template": "bindingDirectRead",
+      "importStyle": "default",
+      "expected": {
+        "runtime": {
+          "flags": [
+            "credentials-access"
+          ],
+          "redLines": []
+        },
+        "static": {
+          "verdict": "PASS",
+          "redLines": []
+        }
+      }
+    }
+  ]
+}

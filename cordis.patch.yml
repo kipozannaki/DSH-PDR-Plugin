@@ -1,0 +1,11 @@
+# DSH-PDR-Plugin 插件层（DeepSeek Harness Plugin Detection and Response）
+# 语义参考 dsh-tauri-pet 的 bundle patch：- insert 追加运行时条目
+- insert:
+    - id: dsh-pdr-plugin
+      name: dsh-pdr-plugin
+      config:
+        mode: monitor
+        # ★ 早期安装（M0 实证的时序硬约束）：在 patch 合成/配置物化阶段就地 require
+        # CJS 探针核并打 hook，早于任何其他插件模块 import。
+        # try/catch 包裹 = fail-safe：表达式失败不得拖垮宿主启动（方案 §6.3）。
+        earlyInstall: !!js (() => { try { const m = process.getBuiltinModule('node:module').createRequire(baseUrl)('dsh-pdr-plugin/src/probe/probe-core.cjs'); m.boot(baseUrl); return m.isInstalled(); } catch (e) { return false; } })()

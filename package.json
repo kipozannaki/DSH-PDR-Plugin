@@ -1,0 +1,64 @@
+{
+  "name": "dsh-pdr-plugin",
+  "version": "0.2.1",
+  "description": "DSH-PDR-Plugin (DeepSeek Harness Plugin Detection and Response) — 装前体检、装后透明（运行时插件行为监控与越界判定）、本地优先，按插件归属记录网络/fs/子进程行为并实时告警红线组合",
+  "type": "module",
+  "license": "MIT",
+  "author": "DSH-PDR-Plugin contributors",
+  "homepage": "https://github.com/kipozannaki/DSH-PDR-Plugin#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/kipozannaki/DSH-PDR-Plugin.git"
+  },
+  "bugs": {
+    "url": "https://github.com/kipozannaki/DSH-PDR-Plugin/issues"
+  },
+  "keywords": [
+    "dsh",
+    "dsh-plugin",
+    "plugin security",
+    "supply chain security",
+    "runtime monitoring",
+    "behavioral analysis",
+    "sarif",
+    "audit",
+    "插件安全",
+    "行为监控",
+    "防火墙",
+    "体检"
+  ],
+  "main": "./src/index.js",
+  "bin": {
+    "dsh-pdr": "./bin/dsh-pdr.cjs"
+  },
+  "exports": {
+    ".": "./src/index.js",
+    "./src/*": "./src/*",
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "src",
+    "bin",
+    "cordis.patch.yml",
+    "README.md",
+    "LICENSE",
+    ".gitignore"
+  ],
+  "scripts": {
+    "test": "node test/run-all.mjs",
+    "test:list": "node test/run-all.mjs --list",
+    "audit": "node bin/dsh-pdr.cjs audit --format md",
+    "audit:sarif": "node bin/dsh-pdr.cjs audit --format sarif",
+    "check": "node bin/dsh-pdr.cjs --pdr-check"
+  },
+  "engines": {
+    "dsh": ">=0.1.7",
+    "node": ">=22.12"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "sideEffects": true
+}

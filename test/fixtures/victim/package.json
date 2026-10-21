@@ -1,0 +1,7 @@
+{
+  "name": "victim",
+  "version": "1.0.0",
+  "type": "module",
+  "main": "index.mjs",
+  "description": "smoke fixture: 红线行为模拟插件"
+}

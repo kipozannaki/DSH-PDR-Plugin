@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>DSH-PDR-Plugin · 插件安全中心</title>
+  <link rel="stylesheet" href="./style.css" />
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="shield">🛡</span>
+      <div>
+        <h1>插件安全中心</h1>
+        <p class="sub">DSH-PDR-Plugin · DeepSeek Harness Plugin Detection and Response（Monitor 模式）</p>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span id="demo-badge" class="chip chip-demo hidden">演示数据</span>
+      <span id="probe-chip" class="chip chip-probe">探针 …</span>
+      <button id="btn-export" class="btn">导出审计报告</button>
+      <button id="btn-refresh" class="btn btn-primary">刷新</button>
+    </div>
+  </header>
+
+  <section class="stats" id="stats-row">
+    <div class="stat"><div class="stat-num" id="stat-plugins">–</div><div class="stat-label">已装插件</div></div>
+    <div class="stat"><div class="stat-num bad" id="stat-redlines">–</div><div class="stat-label">红线告警</div></div>
+    <div class="stat"><div class="stat-num" id="stat-events">–</div><div class="stat-label">行为事件（全部）</div></div>
+    <div class="stat"><div class="stat-num" id="stat-blocked">–</div><div class="stat-label">BLOCK 判定</div></div>
+  </section>
+
+  <main class="layout">
+    <section class="panel plugins-panel">
+      <div class="panel-head">
+        <h2>插件清单</h2>
+        <span class="hint">点击卡片筛选时间线</span>
+      </div>
+      <div id="plugin-list" class="plugin-list"></div>
+    </section>
+
+    <section class="panel timeline-panel">
+      <div id="redline-banner"></div>
+      <div class="panel-head">
+        <h2>行为时间线</h2>
+        <div class="filters">
+          <select id="f-plugin"><option value="">全部插件</option></select>
+          <select id="f-flag">
+            <option value="">全部行为</option>
+            <option value="redline">仅红线</option>
+            <option value="credentials-access">凭据访问</option>
+            <option value="cleartext-http">明文外联</option>
+            <option value="subprocess">子进程</option>
+            <option value="blocked">已拦截</option>
+          </select>
+          <input id="f-search" type="search" placeholder="检索目标路径 / URL…" />
+        </div>
+      </div>
+      <div class="table-wrap">
+        <table class="events">
+          <thead>
+            <tr><th>时间</th><th>插件</th><th>API</th><th>目标</th><th>标记</th></tr>
+          </thead>
+          <tbody id="event-rows"></tbody>
+        </table>
+        <div id="events-empty" class="empty hidden">没有匹配的行为事件</div>
+      </div>
+      <div class="footnote">
+        本地优先：行为日志仅存本机（<code>$DSH_HOME/firewall/</code>），不上传任何遥测。
+        判定为启发式辅助，不替代人工审查。
+      </div>
+    </section>
+  </main>
+
+  <script src="./app.js"></script>
+</body>
+</html>
