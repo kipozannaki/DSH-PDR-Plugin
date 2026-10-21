@@ -262,16 +262,18 @@ dsh-pdr aggregate --source prod=/m1/.dsh/firewall --source dev=/m2/.dsh/firewall
 否则会 `record → 推送 → record` 自激，还可能因目标是 `http://` 而触发 cleartext 红线形成正反馈。
 真机验证：启用推送跑完整会话，事件流里 webhook 端口相关事件 **0 条**。
 
-### （2026-10-21，已跑通）
+### 真实会话验证（已跑通）
+
+用一个独立 profile（示例里叫 `verify`）装本插件 + 一个会做 I/O 的观察靶插件，然后用 `dsh-pdr` 起会话：
 
 ```powershell
-dsh --profile pdr-hl --from-default-profile headless --dump-config
-dsh plugin --profile pdr-hl add file:E:\chat\dsh-pdr-plugin
-dsh plugin --profile pdr-hl add file:E:\chat\pdr-observer-target
-node bin\dsh-pdr.cjs --profile pdr-hl --patch <测试用凭据 patch> "Reply with exactly: pdr-verify-ok"
+dsh --profile verify --from-default-profile headless --dump-config
+dsh plugin --profile verify add file:<本仓库路径>
+dsh plugin --profile verify add file:<观察靶插件路径>
+node bin\dsh-pdr.cjs --profile verify "Reply with exactly: verify-ok"
 ```
 
-结果：`exit=0`，观察靶的 mkdir/write/read **3/3 归因到 `pdr-observer-target`**，5,192 事件/1.12 MB，无自反馈；
+结果：`exit=0`，观察靶的 mkdir/write/read **3/3 归因到该插件名**，5,192 事件/1.12 MB，无自反馈；
 去掉预载（仅 earlyInstall）同一会话 926 事件全归 `host`、0/3 归因。
 **预载是归因的必要条件，不是优化项。**
 

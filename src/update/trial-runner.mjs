@@ -14,13 +14,23 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { createRequire } from 'node:module';
+import { resolveDshNodeModules } from '../util/dsh-deps.js';
 
 const req = createRequire(import.meta.url);
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DEPS = 'C:/Users/na\'k\'i/AppData/Roaming/dsh-tauri/dependencies/dsh/node_modules';
+// 绝不能写死安装路径：优先用父进程传下来的 DSH_DEPS，其次反推/探测。
+const DEPS = resolveDshNodeModules();
 
 const pluginDir = path.resolve(process.argv[2] || '');
 const out = { importOk: false, startOk: false, error: null, behaviors: [], redFlags: [], isoHome: null };
+
+if (!DEPS) {
+  // 环境不具备时明确报"无法试装"，而不是给一个误导性的 FAIL（像是插件的问题）
+  out.error = 'DSH_NODE_MODULES_NOT_FOUND: 找不到 DSH 运行时依赖（@deepseek-ai/cordis）；'
+    + '试装需要宿主自带该依赖，请设置 DSH_DEPS 指向 DSH 的 node_modules';
+  process.stdout.write(JSON.stringify(out));
+  process.exit(0);
+}
 
 // 一次性隔离 DSH_HOME：插件写不进真实 home
 const isoHome = mkdtempSync(path.join(tmpdir(), 'fw-trial-home-'));

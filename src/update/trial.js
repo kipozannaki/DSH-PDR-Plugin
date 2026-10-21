@@ -13,16 +13,20 @@
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { resolveDshNodeModules } from '../util/dsh-deps.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const RUNNER = path.join(HERE, 'trial-runner.mjs');
 
 export function trialInstall({ pluginDir, timeoutMs = 10_000 } = {}) {
   const dir = path.resolve(pluginDir);
+  // 子进程拿不到宿主的模块解析链，必须把 cordis 所在 node_modules 显式传下去
+  const deps = resolveDshNodeModules();
   const result = spawnSync(process.execPath, [RUNNER, dir], {
     timeout: timeoutMs,
     encoding: 'utf8',
     killSignal: 'SIGKILL',
+    env: { ...process.env, ...(deps ? { DSH_DEPS: deps } : {}) },
   });
 
   // ① 超时挂起（死循环 / 永不 resolve）

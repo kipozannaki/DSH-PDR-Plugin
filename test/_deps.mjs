@@ -1,16 +1,15 @@
 /**
- * 测试共享：定位 DSH 运行时依赖（cordis / cordis-plugin-loader / dsh-llm）。
+ * 测试共享：定位 DSH 运行时依赖（cordis / cordis-plugin-loader）与真实插件。
  *
  * 开源前这里原本写死了作者机器的绝对路径
- * （`C:/Users/<me>/AppData/Roaming/dsh-tauri/dependencies/dsh/node_modules`），
+ * （`<用户目录>/AppData/Roaming/dsh-tauri/dependencies/dsh/node_modules`），
  * 别人 clone 下来必然跑不了。现在按优先级自动探测：
  *
  *   ① 环境变量 `DSH_DEPS`（CI / 特殊安装位置用）
- *   ② 从当前工作目录向上找 `node_modules/@deepseek-ai/cordis`
+ *   ② 从当前工作目录与脚本位置向上找 `node_modules/@deepseek-ai/cordis`
  *   ③ DSH 的常见安装位置（桌面端依赖目录 / DSH_HOME 下的运行时）
  *
- * 全部落空时返回 null，调用方应跳过依赖宿主的用例并**明确报出跳过**
- * （而不是静默通过——那会让"测试通过"变成假象）。
+ * 全部落空时抛**可读**错误，而不是返回 undefined 一路传到深层才炸。
  */
 import { createRequire } from 'node:module';
 import { existsSync, statSync, readdirSync, readFileSync, mkdirSync, cpSync, symlinkSync } from 'node:fs';
@@ -23,7 +22,7 @@ export function findDshNodeModules() {
   if (env && isRuntimeDeps(env)) return path.resolve(env);
 
   // ② 从 cwd 与脚本位置向上找
-  const bases = [process.cwd(), path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))];
+  const bases = [process.cwd(), scriptDir()];
   for (const base of bases) {
     let dir = path.resolve(base);
     for (let i = 0; i < 8; i++) {
@@ -50,6 +49,10 @@ export function findDshNodeModules() {
   return null;
 }
 
+function scriptDir() {
+  return path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
+}
+
 function isRuntimeDeps(nm) {
   try {
     return statSync(path.join(nm, '@deepseek-ai', 'cordis')).isDirectory();
@@ -62,11 +65,10 @@ function isRuntimeDeps(nm) {
  */
 export function resolveViaNode(spec = '@deepseek-ai/cordis') {
   const req = createRequire(import.meta.url);
-  const bases = [process.cwd(), path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))];
+  const bases = [process.cwd(), scriptDir()];
   for (const base of bases) {
     try {
       const resolved = req.resolve(spec, { paths: [base] });
-      // resolved 形如 <nm>/@deepseek-ai/cordis/lib/index.js → 取 <nm>
       const idx = resolved.replace(/\\/g, '/').lastIndexOf('/@deepseek-ai/');
       if (idx > 0) return resolved.slice(0, idx).replace(/\//g, path.sep);
     } catch { /* 下一候选 */ }
@@ -75,7 +77,7 @@ export function resolveViaNode(spec = '@deepseek-ai/cordis') {
 }
 
 /**
- * 取依赖目录；找不到时抛出**可读**错误（而不是 undefined 一路传到深层才炸）。
+ * 取依赖目录；找不到时抛出**可读**错误。
  * @param {string} [what] 用途说明，出现在错误信息里
  */
 export function requireDshNodeModules(what = '测试') {
@@ -86,7 +88,7 @@ export function requireDshNodeModules(what = '测试') {
       + '  未找到。请设置环境变量 DSH_DEPS 指向 DSH 的 node_modules 目录，例如：\n'
       + '    PowerShell:  $env:DSH_DEPS = "C:\\path\\to\\dsh\\node_modules"\n'
       + '    bash:        export DSH_DEPS=/path/to/dsh/node_modules\n'
-      + `  已尝试：DSH_DEPS、cwd 向上查找、以及 DSH 常见安装位置。`,
+      + '  已尝试：DSH_DEPS、cwd 向上查找、以及 DSH 常见安装位置。',
     );
   }
   return nm;
@@ -103,7 +105,7 @@ export function defaultEventLog() {
   return path.join(dshHome(), 'firewall', 'events.jsonl');
 }
 
-/** 列出本机所有 profile 目录（默认按修改时间新→旧） */
+/** 列出本机所有 profile 目录（按修改时间新→旧） */
 export function listProfiles() {
   const root = path.join(dshHome(), 'profiles');
   try {
@@ -118,34 +120,27 @@ export function listProfiles() {
 
 /**
  * 在已安装的 profile 里找一个真实插件目录。
- * 开源后不能写死作者本机的 `~/.dsh/profiles/tauri/...`——
- * 别人机器上没有那个 profile，测试必红。这里按"任意 profile 装了它就算有"来发现。
+ * 开源后不能写死作者本机的 profile——别人机器上没有，测试必红。
  *
  * @param {string} name 插件包名
  * @returns {string|null}
  */
 export function findInstalledPlugin(name) {
   const envDir = process.env.PDR_REAL_PLUGIN_DIR;
-  if (envDir && isPluginDir(envDir, name)) return envDir;
+  if (envDir && isPluginDir(envDir)) return envDir;
 
-  const seen = new Set();
-  const cands = [];
   for (const profile of listProfiles()) {
     const d = path.join(profile, 'node_modules', name);
-    if (seen.has(d)) continue;
-    seen.add(d);
-    cands.push(d);
+    if (isPluginDir(d)) return d;
   }
-  // 也接受从 cwd 直接解析到（开发者在插件源码目录里跑）
-  for (const d of cands) if (isPluginDir(d, name)) return d;
   return null;
 }
 
-function isPluginDir(dir, name) {
+function isPluginDir(dir) {
   try {
     if (!statSync(dir).isDirectory()) return false;
-    const pkg = JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
-    return !name || pkg.name === name || !!pkg.name;
+    JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8'));
+    return true;
   } catch { return false; }
 }
 
@@ -165,10 +160,10 @@ export function buildPluginOverlay(pluginDir, tmpRoot) {
   const runtimeNM = findDshNodeModules();
   if (!runtimeNM) return null;
   const nm = path.join(tmpRoot, 'node_modules');
-  mkdirSyncRecursive(nm);
+  mkdirSync(nm, { recursive: true });
   const pkgName = readPluginName(pluginDir) || path.basename(pluginDir);
   const dest = path.join(nm, pkgName);
-  try { cpSyncRecursive(pluginDir, dest); } catch { return null; }
+  try { cpSync(pluginDir, dest, { recursive: true }); } catch { return null; }
   const scope = path.join(nm, '@deepseek-ai');
   try { symlinkSync(path.join(runtimeNM, '@deepseek-ai'), scope, 'junction'); } catch { return null; }
   return dest;
@@ -177,13 +172,10 @@ export function buildPluginOverlay(pluginDir, tmpRoot) {
 function readPluginName(dir) {
   try { return JSON.parse(readFileSync(path.join(dir, 'package.json'), 'utf8')).name; } catch { return null; }
 }
-function mkdirSyncRecursive(d) { mkdirSync(d, { recursive: true }); }
-function cpSyncRecursive(a, b) { cpSync(a, b, { recursive: true }); }
 
 /** 插件包根目录（从本文件所在 test/ 上跳一级） */
 export function packageRoot() {
-  const here = new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1');
-  return path.resolve(path.dirname(here), '..');
+  return path.resolve(scriptDir(), '..');
 }
 
 export { existsSync };
