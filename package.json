@@ -42,7 +42,7 @@
     "cordis.patch.yml",
     "README.md",
     "LICENSE",
-    ".gitignore"
+    "assets"
   ],
   "scripts": {
     "test": "node test/run-all.mjs",
