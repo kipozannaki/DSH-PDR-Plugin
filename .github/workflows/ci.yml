@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+
+      # No install step: the package has no runtime dependencies. Suites that need a
+      # DSH runtime (real plugins, profiles, external baselines) report SKIP and exit 0.
+      - name: Test
+        run: npm test
+
+      - name: Launcher self-check
+        run: node bin/dsh-pdr.cjs --pdr-check
