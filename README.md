@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A522.12-339933.svg)](package.json)
 [![DSH](https://img.shields.io/badge/dsh-%E2%89%A50.1.7-5B4CF0.svg)](package.json)
+[![CI](https://github.com/kipozannaki/DSH-PDR-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/kipozannaki/DSH-PDR-Plugin/actions/workflows/ci.yml)
 
 **English** · [中文](./README.zh.md)
 
@@ -22,10 +23,12 @@ result. Everything stays on your machine.
 
 - 🔍 **Pre-install health card** — static capability surface, red-line combinations, PASS / WARN / BLOCK
 - 👁 **Runtime firewall** — per-plugin timeline of filesystem, network and subprocess activity
-- ⚖️ **Boundary judge** — declared contract × path class × behaviour baseline; a plugin's day job is silent
-- 🛑 **Block mode** (opt-in) — stop a call before it happens, not after
-- 🔄 **Update guard** — capability diff plus an isolated trial install
-- 📄 **Audit export** — JSON, Markdown, SARIF 2.1.0, CSV; offline, no host required
+- ⚖️ **Boundary judge** — declared contract × path class × behaviour baseline, graded normal / observe / suspicious / boundary
+- 🛑 **Block mode** (opt-in) — stops a declared-violating call before it executes; `credential-exfil` catches a credential read followed by egress in the same breath
+- 🔄 **Update guard** — capability / red-line / dependency diff, plus an isolated trial install in a sandboxed child process
+- 📄 **Audit export** — JSON, Markdown, SARIF 2.1.0, CSV; generated offline from the event log, no host required
+- 🔔 **Webhook alerts** (off by default) — red-line events only, deduplicated and rate-limited; supports `json`, Slack and DingTalk payload formats
+- 📊 **Multi-source aggregation** — merge event logs from several profiles or machines, with cross-source dedup and per-event provenance
 - 🔒 **Local-first** — no telemetry, ever
 
 ## Install
@@ -33,7 +36,7 @@ result. Everything stays on your machine.
 ```bash
 # 1. install into a profile
 dsh plugin --profile <profile> add file:/path/to/dsh-pdr-plugin
-#    or, from the repository:
+#    or, directly from this repository:
 dsh plugin --profile <profile> add github:kipozannaki/DSH-PDR-Plugin
 
 # 2. start the host through the launcher (not `dsh` directly — see below)
@@ -43,7 +46,8 @@ dsh-pdr --profile <profile> web
 dsh-pdr --pdr-check
 ```
 
-Requirements: **Node ≥ 22.12** (for `require(esm)`), **DSH ≥ 0.1.7**.
+Requirements: **Node ≥ 22.12** (for `require(esm)`), **DSH ≥ 0.1.7**, **pnpm** (used by
+`dsh plugin add`).
 
 > **Why the launcher?** A DSH host formalises several `node:*` ESM facades very early, so a probe
 > installed from inside a plugin misses a large slice of calls. Measured on one real session:
@@ -62,15 +66,16 @@ node src/client/serve.js        # http://127.0.0.1:3123/firewall/
 | Stage | Capability | Where |
 |---|---|---|
 | Before install | Health card: capability surface, red-line combinations, PASS / WARN / BLOCK | `src/inspector/` |
+| Before install | Trust score: weighted, auditable formula (red lines −30 each, credential access −5, network −3, subprocess −2) → bands 良好 / 注意 / 谨慎 / 高危 | `src/inspector/trust-score.js` |
 | Runtime | Behaviour probe: network / fs / subprocess, attributed per plugin | `src/probe/` |
 | Runtime | Red-line alerts: credentials+network, credentials+subprocess, cleartext egress | `src/probe/` |
 | Runtime | Boundary judge: contract × path class × baseline → normal / observe / suspicious / boundary | `src/judge/` |
-| Runtime | Contract inference: observe a cold start → draft → human confirmation | `src/judge/infer.js` |
-| Runtime | Block mode: pre-execution check, violation stopped in place (opt-in) | `src/guard/` |
-| On change | Snapshot & rollback of the profile manifest trio | `src/store/snapshot.js` |
+| Runtime | Contract inference: observe a cold start → draft → human confirmation; an inference never launders an observed red line | `src/judge/infer.js` |
+| Runtime | Block mode: pre-execution check, violation stopped in place (opt-in; `alarm` is the default) | `src/guard/` |
+| On change | Snapshot & rollback of the profile manifest trio (`package.json`, `pnpm-lock.yaml`, `cordis.patch.yml`) | `src/store/snapshot.js` |
 | On change | Update guard: capability diff + isolated trial install in a sandboxed child process | `src/update/` |
 | Overview | Security-centre UI: plugin list, trust score, red-line banner, filterable timeline | `src/client/` |
-| Overview | Audit report, SARIF / CSV compliance export, multi-source aggregation | `src/report/` |
+| Overview | Audit report, SARIF 2.1.0 / CSV compliance export, multi-source aggregation | `src/report/` |
 | Overview | Red-line webhook push — off by default, deduped, rate-limited, never self-recording | `src/alert/` |
 
 ## Screenshot
@@ -190,8 +195,10 @@ api.eventLogPath;                  // local JSONL — nothing is uploaded
 
 - Events, snapshots, contracts and health cards live in `$DSH_HOME/firewall/`. **No telemetry.**
 - The only outbound path is a webhook **you** configure. It is off by default, sends red-line
-  events only — never the full timeline, never file contents, never credentials.
-- The plugin holds itself to its own standard: no credential access, no silent network.
+  events only — never the full timeline, never file contents, never credentials. The audit
+  report records only the webhook's origin (scheme + host), never the URL with any token in it.
+- The plugin holds itself to its own standard: no credential access, no silent network. Its own
+  capability surface, as scanned by its own health card, is part of the test suite.
 
 ## Limitations
 
@@ -199,7 +206,8 @@ Stated plainly, because a security tool that overstates its coverage is worse th
 
 - **Heuristic, not a proof.** A static scan cannot see credentials injected at runtime; that is
   what the runtime layer is for. On 154 real ecosystem plugins the static pass recalls 66.1 % at
-  17.2 % false positives.
+  17.2 % false positives. Being listed on a plugin marketplace is not a security review, and
+  neither is this README: treat every plugin, including this one, as untrusted until observed.
 - **Not an adversarial sandbox.** A plugin that deliberately targets the instrumentation
   (native modules, `process.binding`, patching the probe) can evade it. The goal is continuous,
   attributable visibility.
@@ -243,6 +251,13 @@ dsh plugin --profile <p> add file:/path/to/dsh-pdr-plugin
 | [`docs/DESIGN.md`](./docs/DESIGN.md) | architecture, attribution, hook coverage, residual gaps |
 | [`docs/TESTING.md`](./docs/TESTING.md) | every suite, what it asserts, environment variables |
 | [`docs/LESSONS.md`](./docs/LESSONS.md) | findings that changed the implementation |
+| [`CHANGELOG.md`](./CHANGELOG.md) | what changed, when |
+
+## Listing metadata
+
+For plugin marketplaces: screenshots are declared in
+[`screenshots.json`](./screenshots.json) and shipped in `assets/`. The package publishes no
+`postinstall` / `prepare` script, so a source install never needs a pnpm build approval.
 
 ## License
 

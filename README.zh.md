@@ -5,6 +5,7 @@
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 [![Node.js](https://img.shields.io/badge/node-%E2%89%A522.12-339933.svg)](package.json)
 [![DSH](https://img.shields.io/badge/dsh-%E2%89%A50.1.7-5B4CF0.svg)](package.json)
+[![CI](https://github.com/kipozannaki/DSH-PDR-Plugin/actions/workflows/ci.yml/badge.svg)](https://github.com/kipozannaki/DSH-PDR-Plugin/actions/workflows/ci.yml)
 
 [English](./README.md) · **中文**
 
@@ -20,10 +21,13 @@ DSH-PDR 回答另一个问题：**它实际干了什么？**
 
 - 🔍 **装前体检卡**：静态能力面、红线组合、PASS / WARN / BLOCK
 - 👁 **运行时防火墙**：按插件归属的文件 / 网络 / 子进程行为时间线
-- ⚖️ **越界判定**：声明契约 × 路径分类 × 行为基线；本职行为零打扰
-- 🛑 **拦截模式**（可选）：在调用发生之前拦下来，而不是事后
-- 🔄 **更新守护**：能力面 diff + 隔离试装
-- 📄 **审计导出**：JSON / Markdown / SARIF 2.1.0 / CSV，离线可导，不需要起宿主
+- ⚖️ **越界判定**：声明契约 × 路径分类 × 行为基线，分 正常 / 观察 / 可疑 / 越界 四档
+- 🛑 **拦截模式**（可选）：在调用执行之前拦下来，而不是事后；`credential-exfil` 能在
+  「读凭据 → 联网」同一口气里当场拦下外发
+- 🔄 **更新守护**：能力面 / 红线 / 依赖 diff + 子进程沙盒里的隔离试装
+- 📄 **审计导出**：JSON / Markdown / SARIF 2.1.0 / CSV，直接从事件日志离线生成，不需要起宿主
+- 🔔 **Webhook 告警**（默认关闭）：只发红线事件，去重限流；支持 `json`、Slack、钉钉格式
+- 📊 **多源汇总**：合并多个 profile / 多台机器的事件日志，跨源去重，每条事件可溯源
 - 🔒 **本地优先**：没有任何遥测
 
 ## 安装
@@ -31,7 +35,7 @@ DSH-PDR 回答另一个问题：**它实际干了什么？**
 ```bash
 # 1. 装到某个 profile
 dsh plugin --profile <profile> add file:/path/to/dsh-pdr-plugin
-#    或直接从仓库装：
+#    或直接从本仓库装：
 dsh plugin --profile <profile> add github:kipozannaki/DSH-PDR-Plugin
 
 # 2. 用 dsh-pdr 启动（不要直接 dsh —— 原因见下）
@@ -41,7 +45,7 @@ dsh-pdr --profile <profile> web
 dsh-pdr --pdr-check
 ```
 
-前置：**Node ≥ 22.12**（用到 `require(esm)`）、**DSH ≥ 0.1.7**。
+前置：**Node ≥ 22.12**（用到 `require(esm)`）、**DSH ≥ 0.1.7**、**pnpm**（`dsh plugin add` 依赖它）。
 
 > **为什么必须用启动器？** 真实 DSH 宿主在启动早期就固化了几个 `node:*` 的 ESM facade，
 > 从插件入口装的探针会漏掉一大片调用。一次真实会话实测：只靠 `earlyInstall`，
@@ -59,15 +63,16 @@ node src/client/serve.js        # http://127.0.0.1:3123/firewall/
 | 阶段 | 能力 | 位置 |
 |---|---|---|
 | 装前 | 体检卡：能力面、红线组合、PASS / WARN / BLOCK | `src/inspector/` |
+| 装前 | 信任分：加权公式透明可审计（红线每条 −30、凭据访问 −5、联网 −3、子进程 −2）→ 良好 / 注意 / 谨慎 / 高危 | `src/inspector/trust-score.js` |
 | 运行时 | 行为探针：网络 / fs / 子进程，按插件归属 | `src/probe/` |
 | 运行时 | 红线告警：凭据+网络、凭据+子进程、明文外联 | `src/probe/` |
 | 运行时 | 越界判定：契约 × 路径分类 × 基线 → 正常 / 观察 / 可疑 / 越界 | `src/judge/` |
-| 运行时 | 契约推断：冷启动观察 → 草案 → 人工确认 | `src/judge/infer.js` |
-| 运行时 | 拦截（可选）：执行前检查，越界当场拦 | `src/guard/` |
-| 变更时 | profile 清单三件套快照 / 回滚 | `src/store/snapshot.js` |
-| 变更时 | 更新守护：能力面 diff + 子进程隔离试装 | `src/update/` |
+| 运行时 | 契约推断：冷启动观察 → 草案 → 人工确认；推断**永不**洗白已观测到的红线 | `src/judge/infer.js` |
+| 运行时 | 拦截（可选）：执行前检查，越界当场拦（默认 `alarm` 只告警） | `src/guard/` |
+| 变更时 | profile 清单三件套（`package.json` / `pnpm-lock.yaml` / `cordis.patch.yml`）快照 / 回滚 | `src/store/snapshot.js` |
+| 变更时 | 更新守护：能力面 diff + 子进程沙盒隔离试装 | `src/update/` |
 | 总览 | 安全中心 UI：插件清单、信任分、红线栏、可筛选时间线 | `src/client/` |
-| 总览 | 审计报告、SARIF / CSV 合规导出、多源汇总 | `src/report/` |
+| 总览 | 审计报告、SARIF 2.1.0 / CSV 合规导出、多源汇总 | `src/report/` |
 | 总览 | 红线 webhook 推送——默认关闭、去重限流、不自我记账 | `src/alert/` |
 
 ## 界面
@@ -182,15 +187,18 @@ api.eventLogPath;                  // 本地 JSONL——不上传任何数据
 
 - 事件、快照、契约、体检结果都在 `$DSH_HOME/firewall/`。**没有任何遥测。**
 - 唯一的外发路径是**你自己**配的 webhook：默认关闭，只发红线事件，不发全量时间线、
-  不发文件内容、不发凭据。
-- 本插件拿自己的标准审自己：无凭据访问、无静默联网。
+  不发文件内容、不发凭据。审计报告里只记 webhook 的来源（协议 + 主机），
+  不记带 token 的完整 URL。
+- 本插件拿自己的标准审自己：无凭据访问、无静默联网。它自己的能力面就是用
+  自家体检卡扫的，结果进测试套件。
 
 ## 已知边界
 
 写清楚，因为一个夸大覆盖面的安全工具比没有更糟：
 
 - **启发式，不是证明。** 静态扫描看不见运行时注入的凭据，那正是运行时层的意义。
-  154 个真实生态插件上，静态召回 66.1%、误报 17.2%。
+  154 个真实生态插件上，静态召回 66.1%、误报 17.2%。被市场收录不是安全审查，
+  这份 README 也不是——包括本插件在内，任何插件在被观测之前都应视为不可信。
 - **不是对抗级沙箱。** 有意针对探针本身的插件（原生模块、`process.binding`、反挂载）可以绕过。
   目标是**持续、可归因的可见性**。
 - **已知缺口**：当 facade 早于探针建立时，`child_process` / `http` / `net` 的具名导入抓不到。
@@ -230,6 +238,12 @@ dsh plugin --profile <p> add file:/path/to/dsh-pdr-plugin
 | [`docs/DESIGN.md`](./docs/DESIGN.md) | 架构、归因、hook 覆盖、残余缺口 |
 | [`docs/TESTING.md`](./docs/TESTING.md) | 每个测试断言什么、环境变量 |
 | [`docs/LESSONS.md`](./docs/LESSONS.md) | 改变过实现的实测教训 |
+| [`CHANGELOG.md`](./CHANGELOG.md) | 版本变更记录 |
+
+## 收录元信息
+
+供插件市场使用：截图声明在 [`screenshots.json`](./screenshots.json)，图片在 `assets/` 里。
+本包不含 `postinstall` / `prepare` 脚本，从源码安装不需要 pnpm 构建授权。
 
 ## 许可
 
