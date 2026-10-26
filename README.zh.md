@@ -16,15 +16,17 @@
 
 DSH-PDR 回答另一个问题：**它实际干了什么？**
 
-它在插件运行的同时观测进程，把每一次 `fs` / 网络 / 子进程调用归属到发起它的插件，
-再用插件自己声明的需求去衡量这次调用，最后把结果摆给你看。数据全部留在本机。
+**经 `dsh-pdr` 启动器启动宿主时**，它观测运行中的进程，把插件发起的 `fs` / 网络 / 子进程
+调用归属到发起它的插件，再用插件自己声明的需求去衡量这次调用，最后把结果摆给你看。
+数据全部留在本机。归因是尽力而为，不是保证——见[已知边界](#已知边界)。
 
 - 🔍 **装前体检卡**：静态能力面、红线组合、PASS / WARN / BLOCK
 - 👁 **运行时防火墙**：按插件归属的文件 / 网络 / 子进程行为时间线
 - ⚖️ **越界判定**：声明契约 × 路径分类 × 行为基线，分 正常 / 观察 / 可疑 / 越界 四档
 - 🛑 **拦截模式**（可选）：在调用执行之前拦下来，而不是事后；`credential-exfil` 能在
   「读凭据 → 联网」同一口气里当场拦下外发
-- 🔄 **更新守护**：能力面 / 红线 / 依赖 diff + 子进程沙盒里的隔离试装
+- 🔄 **更新守护**：能力面 / 红线 / 依赖 diff + 隔离子进程里的试装（临时 `DSH_HOME`、
+  硬超时——是独立进程，不是沙箱）
 - 📄 **审计导出**：JSON / Markdown / SARIF 2.1.0 / CSV，直接从事件日志离线生成，不需要起宿主
 - 🔔 **Webhook 告警**（默认关闭）：只发红线事件，去重限流；支持 `json`、Slack、钉钉格式
 - 📊 **多源汇总**：合并多个 profile / 多台机器的事件日志，跨源去重，每条事件可溯源
@@ -51,6 +53,14 @@ dsh-pdr --pdr-check
 > 从插件入口装的探针会漏掉一大片调用。一次真实会话实测：只靠 `earlyInstall`，
 > 观察靶 **0/3** 归因（926 条事件全部退化成 `host`）；加上预载后 **3/3** 归因（5 192 条事件）。
 > 预载是必要条件，不是优化项——见 [`docs/DESIGN.md`](./docs/DESIGN.md)。
+>
+> **启动器从哪来、在哪能用。** `dsh plugin add` 会把包的 `bin` 链接到
+> `<profile>/node_modules/.bin/`，装完后在该 profile 上下文里可用 `npx dsh-pdr …`，
+> 或直接 `node <profile>/node_modules/dsh-pdr-plugin/bin/dsh-pdr.cjs …`——两者都会设
+> `NODE_OPTIONS=--require …/preload.cjs` 并把其余参数原样转给 `dsh`。
+> **DSH Desktop 桌面应用不经过 shell 启动**，启动器注入不进去：Desktop 的会话目前
+> 归因不到，不要以为这个插件在看着它。体检卡与离线 `audit` / `aggregate` 不受影响；
+> 宿主级 `--import` 钩子（不需要启动器）是已记录的下一步。
 
 什么都不装也能先看效果：
 
@@ -70,7 +80,7 @@ node src/client/serve.js        # http://127.0.0.1:3123/firewall/
 | 运行时 | 契约推断：冷启动观察 → 草案 → 人工确认；推断**永不**洗白已观测到的红线 | `src/judge/infer.js` |
 | 运行时 | 拦截（可选）：执行前检查，越界当场拦（默认 `alarm` 只告警） | `src/guard/` |
 | 变更时 | profile 清单三件套（`package.json` / `pnpm-lock.yaml` / `cordis.patch.yml`）快照 / 回滚 | `src/store/snapshot.js` |
-| 变更时 | 更新守护：能力面 diff + 子进程沙盒隔离试装 | `src/update/` |
+| 变更时 | 更新守护：能力面 diff + 隔离子进程试装 | `src/update/` |
 | 总览 | 安全中心 UI：插件清单、信任分、红线栏、可筛选时间线 | `src/client/` |
 | 总览 | 审计报告、SARIF 2.1.0 / CSV 合规导出、多源汇总 | `src/report/` |
 | 总览 | 红线 webhook 推送——默认关闭、去重限流、不自我记账 | `src/alert/` |
@@ -102,9 +112,10 @@ node src/client/serve.js --jsonl <path>      # 回放真实探针日志（$DSH_H
 ```
 
 探针在**任何插件实例化之前**包住 `RegistryService.prototype.plugin`，插件入口因此跑在
-`AsyncLocalStorage` 上下文里，它发起的每一次调用（包括经宿主注入服务发起的）都能被归属。
+`AsyncLocalStorage` 上下文里，它发起的调用（包括经宿主注入服务发起的）能够被归属。
 这条快路径很便宜：真实会话实测（约 5 600 次 hook），栈归因约占墙钟 1.9%，ALS 约 0.05%
-（每次调用 114 µs 对 2.9 µs），所以默认是 `als`。
+（每次调用 114 µs 对 2.9 µs），所以默认是 `als`。`als` 覆盖不到的调用（没经过被包入口的、
+以及[已知边界](#已知边界)里列的具名导入缺口）会退回 `host`，不会被悄悄记到别人头上。
 
 完整架构、hook 覆盖矩阵、以及诚实的残余缺口清单：[`docs/DESIGN.md`](./docs/DESIGN.md)。
 
@@ -177,7 +188,7 @@ api.inferContracts();              // 从行为迹生成草案（永不自动生
 api.adoptContract(name);           // 人工确认草案
 api.setPolicy({ rules: { 'credential-exfil': 'block' } });
 api.getUpdateDiff(before, after);  // 这次更新改了什么
-api.trialInstall(pluginDir);       // 隔离试装，崩溃/挂起都关在沙盒里
+api.trialInstall(pluginDir);       // 隔离子进程试装：崩溃/挂起不影响宿主
 api.getAuditReport();              // JSON 审计报告
 api.getSarif(); api.getCsv();      // 合规格式
 api.eventLogPath;                  // 本地 JSONL——不上传任何数据
@@ -201,8 +212,14 @@ api.eventLogPath;                  // 本地 JSONL——不上传任何数据
   这份 README 也不是——包括本插件在内，任何插件在被观测之前都应视为不可信。
 - **不是对抗级沙箱。** 有意针对探针本身的插件（原生模块、`process.binding`、反挂载）可以绕过。
   目标是**持续、可归因的可见性**。
+- **归因依赖启动器。** 不经 `dsh-pdr`（或其它宿主级预载）时，从插件入口装的探针时机太晚，
+  归因直接塌掉——真实会话实测 **0/3**、全部退化成 `host`。DSH **Desktop 桌面应用无法经过
+  启动器启动**，它的会话目前归因不到；体检卡与离线 `audit` / `aggregate` 不受影响。
+  宿主级 `--import` 钩子是已记录的下一步。
 - **已知缺口**：当 facade 早于探针建立时，`child_process` / `http` / `net` 的具名导入抓不到。
   `fs` 由两层 hook 覆盖。
+- **试装是隔离子进程，不是沙箱。** 它拿到临时 `DSH_HOME`、硬超时与挂起即 SIGKILL，
+  插件崩溃或挂起拖不垮宿主——但插件在里面仍然是你的用户权限在跑。
 - **宿主内 web 挂载未在真实宿主验证。** `dsh-h3` 适配器按一个运行中社区插件的实测契约实现，
   并有 11 条注入 runtime 断言覆盖；但 `dsh-h3` 是 Typert 虚拟模块，离线无法解析。
   在真实宿主验证之前，面板回落到 `serve.js`。

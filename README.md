@@ -17,15 +17,16 @@ until the next update.
 
 DSH-PDR answers a different question: **what did it actually do?**
 
-It observes the process while it runs, attributes every `fs` / network / subprocess call to the
-plugin that made it, judges that call against what the plugin claims to need, and shows you the
-result. Everything stays on your machine.
+When the host is started through its launcher, it observes the running process, attributes the
+`fs` / network / subprocess calls plugins make to the plugin that made them, judges those calls
+against what the plugin claims to need, and shows you the result. Everything stays on your
+machine. Attribution is best-effort, not a guarantee — see [Limitations](#limitations).
 
 - 🔍 **Pre-install health card** — static capability surface, red-line combinations, PASS / WARN / BLOCK
 - 👁 **Runtime firewall** — per-plugin timeline of filesystem, network and subprocess activity
 - ⚖️ **Boundary judge** — declared contract × path class × behaviour baseline, graded normal / observe / suspicious / boundary
 - 🛑 **Block mode** (opt-in) — stops a declared-violating call before it executes; `credential-exfil` catches a credential read followed by egress in the same breath
-- 🔄 **Update guard** — capability / red-line / dependency diff, plus an isolated trial install in a sandboxed child process
+- 🔄 **Update guard** — capability / red-line / dependency diff, plus a trial install in an isolated child process (temp `DSH_HOME`, hardened timeout — a separate process, not a sandbox)
 - 📄 **Audit export** — JSON, Markdown, SARIF 2.1.0, CSV; generated offline from the event log, no host required
 - 🔔 **Webhook alerts** (off by default) — red-line events only, deduplicated and rate-limited; supports `json`, Slack and DingTalk payload formats
 - 📊 **Multi-source aggregation** — merge event logs from several profiles or machines, with cross-source dedup and per-event provenance
@@ -54,6 +55,16 @@ Requirements: **Node ≥ 22.12** (for `require(esm)`), **DSH ≥ 0.1.7**, **pnpm
 > `earlyInstall` alone attributed **0 of 3** target-plugin calls (926 events, all fell back to
 > `host`); adding the preload attributed **3 of 3** (5 192 events). The preload is a requirement,
 > not an optimisation — [`docs/DESIGN.md`](./docs/DESIGN.md#timing-is-the-hard-constraint).
+>
+> **Where the launcher comes from, and where it works.** `dsh plugin add` links the package's
+> `bin` into `<profile>/node_modules/.bin/`, so after installing you can call it as
+> `npx dsh-pdr …` from that profile's context, or `node <profile>/node_modules/dsh-pdr-plugin/bin/dsh-pdr.cjs …`
+> directly — either way it sets `NODE_OPTIONS=--require …/preload.cjs` and forwards everything
+> else to `dsh`. **The DSH Desktop app does not go through a shell**, so the launcher cannot
+> inject into it; for Desktop, attribute nothing rather than assume this plugin is watching —
+> the health card and the offline `audit` / `aggregate` commands still work, and a
+> `--import`-based hook (host-level, no launcher) is the tracked next step
+> ([#1](https://github.com/kipozannaki/DSH-PDR-Plugin/issues)).
 
 Nothing installed? The UI runs on demo data:
 
@@ -73,7 +84,7 @@ node src/client/serve.js        # http://127.0.0.1:3123/firewall/
 | Runtime | Contract inference: observe a cold start → draft → human confirmation; an inference never launders an observed red line | `src/judge/infer.js` |
 | Runtime | Block mode: pre-execution check, violation stopped in place (opt-in; `alarm` is the default) | `src/guard/` |
 | On change | Snapshot & rollback of the profile manifest trio (`package.json`, `pnpm-lock.yaml`, `cordis.patch.yml`) | `src/store/snapshot.js` |
-| On change | Update guard: capability diff + isolated trial install in a sandboxed child process | `src/update/` |
+| On change | Update guard: capability diff + trial install in an isolated child process | `src/update/` |
 | Overview | Security-centre UI: plugin list, trust score, red-line banner, filterable timeline | `src/client/` |
 | Overview | Audit report, SARIF 2.1.0 / CSV compliance export, multi-source aggregation | `src/report/` |
 | Overview | Red-line webhook push — off by default, deduped, rate-limited, never self-recording | `src/alert/` |
@@ -106,10 +117,12 @@ store / report ─────── JSONL on disk, audit export, optional webho
 ```
 
 The probe wraps `RegistryService.prototype.plugin` before any plugin is instantiated, so plugin
-entry points run inside an `AsyncLocalStorage` context and every call they start is attributed —
+entry points run inside an `AsyncLocalStorage` context and the calls they start are attributed —
 including calls made through injected host services. This is the cheap path: measured on a real
 session (~5 600 hooks), stack-based attribution costs ≈ 1.9 % of wall clock against ALS's
-≈ 0.05 % (per-op: 114 µs vs 2.9 µs), so `als` is the default.
+≈ 0.05 % (per-op: 114 µs vs 2.9 µs), so `als` is the default. What `als` does not cover —
+calls that never cross a wrapped entry point, the named-import gaps listed under
+[Limitations](#limitations) — falls back to `host` rather than being silently misattributed.
 
 Full architecture, hook-coverage matrix and the honest list of residual gaps:
 [`docs/DESIGN.md`](./docs/DESIGN.md).
@@ -211,8 +224,17 @@ Stated plainly, because a security tool that overstates its coverage is worse th
 - **Not an adversarial sandbox.** A plugin that deliberately targets the instrumentation
   (native modules, `process.binding`, patching the probe) can evade it. The goal is continuous,
   attributable visibility.
+- **Attribution needs the launcher.** Without `dsh-pdr` (or another host-level preload), the
+  in-plugin probe installs too late and attribution collapses — measured **0 of 3** on a real
+  session with everything falling back to `host`. The DSH **Desktop app cannot be launched
+  through the launcher**, so its sessions are currently outside attribution; the health card and
+  the offline `audit` / `aggregate` commands are unaffected. A host-level `--import` hook is the
+  tracked next step.
 - **Known gaps** — named imports of `child_process` / `http` / `net` when the facade predates the
   probe. `fs` is covered on both hook layers.
+- **The trial install is an isolated child process, not a sandbox.** It gets a temp `DSH_HOME`,
+  a hard timeout and SIGKILL on hang, so a crashing or hung plugin cannot take the host down —
+  but a plugin is still running with your user's privileges inside it.
 - **In-host web mount is unverified.** The `dsh-h3` adapter follows a contract measured on a live
   community plugin and is covered by 11 injected-runtime assertions, but `dsh-h3` is a Typert
   virtual module that cannot be resolved offline. Until it is verified in a live host the panel
