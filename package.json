@@ -1,6 +1,6 @@
 {
   "name": "dsh-pdr-plugin",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "DSH-PDR-Plugin (DeepSeek Harness Plugin Detection and Response) — 装前体检、装后透明（运行时插件行为监控与越界判定）、本地优先，按插件归属记录网络/fs/子进程行为并实时告警红线组合",
   "type": "module",
   "license": "MIT",
