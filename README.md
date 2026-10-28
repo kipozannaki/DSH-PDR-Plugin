@@ -25,6 +25,7 @@ machine. Attribution is best-effort, not a guarantee — see [Limitations](#limi
 - 🔍 **Pre-install health card** — static capability surface, red-line combinations, PASS / WARN / BLOCK
 - 👁 **Runtime firewall** — per-plugin timeline of filesystem, network and subprocess activity
 - ⚖️ **Boundary judge** — declared contract × path class × behaviour baseline, graded normal / observe / suspicious / boundary
+- 📊 **In-app monitor tab** — a `行为监控` tab in the web UI's view bar: per-plugin call stats, red-line tags and a live timeline (auto-refresh), fed by the plugin's own in-host API
 - 🛑 **Block mode** (opt-in) — stops a declared-violating call before it executes; `credential-exfil` catches a credential read followed by egress in the same breath
 - 🔄 **Update guard** — capability / red-line / dependency diff, plus a trial install in an isolated child process (temp `DSH_HOME`, hardened timeout — a separate process, not a sandbox)
 - 📄 **Audit export** — JSON, Markdown, SARIF 2.1.0, CSV; generated offline from the event log, no host required

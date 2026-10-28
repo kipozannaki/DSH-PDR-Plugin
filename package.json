@@ -1,6 +1,6 @@
 {
   "name": "dsh-pdr-plugin",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "DSH-PDR-Plugin (DeepSeek Harness Plugin Detection and Response) — 装前体检、装后透明（运行时插件行为监控与越界判定）、本地优先，按插件归属记录网络/fs/子进程行为并实时告警红线组合",
   "type": "module",
   "license": "MIT",
@@ -27,6 +27,18 @@
     "防火墙",
     "体检"
   ],
+  "peerDependencies": {
+    "@deepseek-ai/cordis": ">=0.2.0-rc.2",
+    "@deepseek-ai/schemastery": ">=3.18.0"
+  },
+  "peerDependenciesMeta": {
+    "@deepseek-ai/cordis": {
+      "optional": true
+    },
+    "@deepseek-ai/schemastery": {
+      "optional": true
+    }
+  },
   "main": "./src/index.js",
   "bin": {
     "dsh-pdr": "./bin/dsh-pdr.cjs"
@@ -34,7 +46,8 @@
   "exports": {
     ".": "./src/index.js",
     "./src/*": "./src/*",
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./client": "./lib/client.js"
   },
   "files": [
     "src",
@@ -46,7 +59,8 @@
     "CHANGELOG.md",
     "LICENSE",
     "assets",
-    "screenshots.json"
+    "screenshots.json",
+    "lib/client.js"
   ],
   "scripts": {
     "test": "node test/run-all.mjs",
@@ -62,6 +76,12 @@
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "inject": [
+        "slots"
+      ],
+      "platform": "web"
     }
   },
   "sideEffects": true

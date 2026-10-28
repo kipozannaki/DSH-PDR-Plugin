@@ -5,6 +5,17 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); version
 
 ## [Unreleased]
 
+### Added
+- **In-app monitor tab**（行为监控）: the web UI's conversation view bar gains a `行为监控` tab
+  backed by this plugin's own in-host API. Host half registers two `connection.fetch` POST routes
+  (`/api/dsh-pdr/overview`, `/api/dsh-pdr/events`) through the deferred-injection seam, with a
+  retrying mount because this plugin's fiber may activate before the connection service; client
+  half is a dependency-free `lib/client.js` bundle (loaded via the `dsh.client` declaration,
+  rendered with the host-provided React) registering the `conversation.view` slot at order 30.
+  The entry now exports `Config`/`name`/`inject` — required since a loader row carrying `config:`
+  against a plugin without a Config schema fails activation (found on a live host: the entry
+  silently never mounted).
+
 ### Changed
 - README restructured into a short entry point. Measurement detail moved to `docs/`
   ([DESIGN](docs/DESIGN.md), [TESTING](docs/TESTING.md), [LESSONS](docs/LESSONS.md)); a Chinese

@@ -26,11 +26,17 @@ import { generateAuditReport, auditReportMarkdown } from './report/audit.js';
 import { buildComplianceExport, toSarif, toCsv } from './report/compliance.js';
 import { aggregateSources, profileByActor, redLineSummary, aggregateMarkdown } from './report/aggregate.js';
 import { createAlertPusher } from './alert/push.js';
+import { bindFirewallApi, mountPanelRoutes } from './panel-host.js';
 
 const req = createRequire(import.meta.url);
 const probe = req('./probe/probe-core.cjs');
 
 export const PLUGIN_NAME = 'dsh-pdr-plugin'; // 显示名 DSH-PDR-Plugin（npm 包名强制小写）
+// cordis 插件名与服务键（面板 client 半边按它 require 本包）
+export const name = PLUGIN_NAME;
+// loader 等这些服务就位后才 apply：connection 供面板数据路由，slots 供 client 面板挂载
+export const inject = ['connection', 'slots'];
+export { Config } from './config.js';
 
 let lastApi = null;
 /** 测试/诊断用：拿到最近一次装配的 API（浏览器半边走 ctx.firewall） */
@@ -263,6 +269,12 @@ export default function firewallPlugin(ctx, config = {}) {
     dataDir,
     eventLogPath: store.path,
   };
+
+  // 4.5 行为监控面板：数据路由（connection.fetch 缝）+ client bundle 的数据源。
+  // mountPanelRoutes 是重试式的：本插件 fiber 可能先于 connection 服务激活，
+  // 服务就位后路由才挂上；期间面板显示"数据通道未接入"，主功能不受影响。
+  bindFirewallApi(api);
+  api.panelRoutes = mountPanelRoutes(ctx);
 
   // 5. 宿主 web 挂载（fail-safe：异步尝试，dsh-h3 缺位/失败都不影响主功能）
   api.webMount = { ok: false, mode: 'pending' };
