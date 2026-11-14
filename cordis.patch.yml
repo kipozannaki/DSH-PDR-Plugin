@@ -1,7 +1,15 @@
-﻿# Bundle patch layer: the row loads the package's main entry as the host half;
-# the `dsh.client` declaration makes the web app load its ./client bundle as the
-# browser half. (earlyInstall fallback lives in the preload; keeping this insert
-# config-free avoids cordis Config validation failing the whole entry.)
+# Bundle patch layer（DeepSeek Harness 的 bundle 叠加层）
+#
+# 这一行把本包的主入口挂成宿主插件（host 半边）；package.json 的 `dsh.client`
+# 声明让 web 端再加载 ./client（浏览器半边的「行为监控」面板）。
+#
+# earlyInstall 是 **无预载时的兜底启动入口**（v0.3 Bootstrap Adapter 的 'bundle' 档）：
+# 在 patch 物化阶段就地 require 探针核并打 hook，早于其它插件模块 import。
+# 它必须配 `Config` 导出——cordis 会对带 config 的 entry 做 schema 校验，
+# 插件不导出 Config 时整个 entry 静默不激活（v0.2.4 真机踩过的坑）。
+# try/catch 包裹 = fail-safe：表达式失败不得拖垮宿主启动。
 - insert:
     - id: dsh-pdr-plugin
       name: dsh-pdr-plugin
+      config:
+        earlyInstall: !!js (() => { try { const m = process.getBuiltinModule('node:module').createRequire(baseUrl)('dsh-pdr-plugin/src/probe/probe-core.cjs'); m.boot(baseUrl); return m.isInstalled(); } catch (e) { return false; } })()

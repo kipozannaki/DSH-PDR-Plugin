@@ -3,6 +3,45 @@
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/); versions follow
 [SemVer](https://semver.org/).
 
+## [0.3.0] — Trusted runtime monitoring
+
+### Added
+- **Bootstrap adapters** (`src/bootstrap/adapters.js`): injection is modelled as a property of the
+  launch entry, not of the probe. Five entries — `launcher`, `preload`, `desktop` (degraded),
+  `bundle` (degraded), `none` — each with its evidence rule, limitation and verification hint.
+  Every verdict carries `evidence` (e.g. `env:PDR_BOOTSTRAP=launcher`) so a classification can be
+  traced to a fact. `dsh-pdr --pdr-check` prints the same matrix offline.
+- **Runtime detector** (`src/bootstrap/detect.js`): node/dsh version, platform, profile, masked
+  `DSH_HOME`/home, adapter + evidence, preload status, registry hook + order, hook count, coverage
+  gaps, attribution counters, storage writability, per-site error tallies.
+- **Probe health monitor**: `FULL` / `PARTIAL` / `OFFLINE` derived only from counters the probe
+  actually maintains, with 11 error-severity checks and one info-level note (bounded ring buffer).
+  Dumped as `<dataDir>/runtime.json` (masked) and served at `POST /api/dsh-pdr/health`.
+- **`dsh-pdr doctor`**: offline read of the last session's verdict — state, entry, preload, host
+  version, attribution, coverage gaps, reasons, notes and error sites.
+- **Hook coverage matrix as a test** (`test/hook-matrix-eval.mjs`): five import styles ×
+  fs / fs.promises / child_process / http / fetch, each in a real child process; the "captured
+  before install" row asserts the known residual gap instead of leaving it in prose.
+- Monitor tab renders the health banner: state badge, reasons, coverage chips, attribution counts,
+  hook order, plus muted info notes.
+
+### Fixed
+- **Attribution was completely off for object-style plugins** (found on a live host while adding
+  the health counters): the registry hook wrapped them with `Object.create(plugin)` and then
+  assigned `inject`/`Config`, which throws in strict mode when the inherited property is a read-only
+  accessor (ESM namespace / frozen plugin objects). The throw was swallowed, so *every* object
+  plugin failed to wrap — 98 recorded errors and 3 121 of 3 127 events attributed to `host`.
+  Now wrapped by shallow clone with `safeDefine` per key; "already wrapped" lives in a `WeakSet`,
+  and re-registration reuses the cached wrapper. Same profile afterwards: **14 named plugins
+  attributed, `errors: 0`**.
+- Repeated wrapping is refused at the property, binding and `fetch` layers and counted as
+  `doubleWrapped` instead of stacking a second layer.
+- JSONL append failures (multi-process contention on Windows) are counted separately as
+  `storeErrors` and reported as `no-store-errors`, so they no longer masquerade as probe defects.
+- `cordis.patch.yml` restores the `earlyInstall` entry — it now activates because the plugin
+  exports `Config`; the bundle adapter therefore works for hosts started without the launcher
+  (measured: entry active, `PARTIAL`, 6 plugins still attributed, `errors: 0`).
+
 ## [Unreleased]
 
 ### Added

@@ -47,6 +47,14 @@ const state = {
   onEvent: null,
   beforeCall: null, // (actor, api, target) => {action, rule, reason} | null；block 时抛错
   errors: 0,
+  errorSites: new Map(),
+  /**
+   * 存储写入失败单独计数（v0.3）：多进程（Desktop 会话 + CLI 会话）同时向同一个
+   * events.jsonl 追加时，Windows 上会出现瞬时的 EPERM/EBUSY。那是**存储争用**，
+   * 不是探针内部逻辑错误——混在 errors 里会让真实缺陷被噪声淹没，
+   * 也会让健康状态误判（实测一次会话 98 次瞬时写失败）。
+   */
+  storeErrors: 0,
   blockedCount: 0,
   ignoreActors: new Set(),
   ignoreDirs: new Set(), // realpath 目录：命中即 'self'，不记账（防自反馈循环）
@@ -67,7 +75,23 @@ const state = {
   fdPaths: new Map(), // open() 返回的 fd -> 路径（写事件反查真路径用）
   registrations: [], // 最近 N 次 plugin() 入参形态（诊断 runAs 归因失败用，非记账）
   fingerprintRoots: [], // ESM 插件的源码指纹搜索根（profile/node_modules 等）
+  /**
+   * ---- v0.3 运行时可观测性（探针健康状态的数据来源）----
+   * 这三项都是**可核验的事实**：谁注入的、包了哪些 API、事件都归到了谁。
+   * 健康状态判定只读它们，不拿"插件已加载"当证据（路线图 §4.3）。
+   */
+  bootstrap: null, // 'preload' | 'bundle' | null（探针是怎么进到进程里的）
+  preloadRan: false, // NODE_OPTIONS 预载是否真的执行过
+  hooked: new Map(), // api -> 包装次数（>1 说明被重复包了，属缺陷）
+  doubleWrapped: 0, // 拦下的二次包装次数（应为 0）
+  actorCounts: new Map(), // actor -> 事件数（归因效果的可核验计数）
 };
+
+/** 错误站点计数：让"errors: 98"这种裸数字可被定位（v0.3 健康状态的可解释性） */
+function bumpError(site) {
+  state.errors++;
+  state.errorSites.set(site, (state.errorSites.get(site) || 0) + 1);
+}
 
 // 自观测代码目录：探针 + 存储 + 体检卡（src/），任何来自这里的 I/O 都是自观测
 // 注意不是整个包根：test/ 等目录里的插件样本必须正常归因
@@ -241,6 +265,7 @@ function record(api, target, meta, actor) {
   state.totalEvents++;
   if (state.events.length < state.maxEvents) state.events.push(event);
   else state.droppedEvents++;
+  state.actorCounts.set(event.actor, (state.actorCounts.get(event.actor) || 0) + 1);
 
   // 调用内去重（真机实测）：红线曾以"复制一条事件再 emit"的方式投递，
   // 导致一次 fetch / http.request 在时间线里出现两条（t 完全相同、只差 redLine 字段），
@@ -272,6 +297,46 @@ function recordBlocked(api, target, actor, decision) {
  * 而 fs 已被 hook；若不加保护就是 record → onEvent → write → record 的自反馈
  * （DSH_HOME 存在时实测把 37MB / 27 万条事件写进启动窗口）。
  */
+/**
+ * 包装标记用 WeakSet，而不是往插件对象上写 __pdrWrapped：
+ * 冻结对象/命名空间对象写不进去（严格模式抛 TypeError），
+ * 而"是否已包装"必须可靠——否则会包两层，造成重复归因上下文。
+ */
+const WRAPPED_PLUGINS = new WeakSet();
+const wrappedOuter = new WeakMap(); // 原插件 -> 包装后的对象（诊断用）
+
+function markWrapped(original, wrapped) {
+  try { WRAPPED_PLUGINS.add(original); } catch { /* 非对象忽略 */ }
+  if (wrapped && typeof wrapped === 'object') { try { WRAPPED_PLUGINS.add(wrapped); } catch { /* 忽略 */ } }
+  try { if (original && typeof original === 'object') wrappedOuter.set(original, wrapped); } catch { /* 忽略 */ }
+}
+
+function isPluginWrapped(plugin) {
+  try {
+    if (plugin && plugin.__pdrWrapped === true) return true;
+    if (WRAPPED_PLUGINS.has(plugin)) return true;
+  } catch { /* 访问器抛错按未包装处理 */ }
+  return false;
+}
+
+/** 取已缓存的包装体（重复注册时复用，保证归因不断、也不叠加） */
+function wrappedOf(plugin) {
+  try { return wrappedOuter.get(plugin) ?? null; } catch { return null; }
+}
+
+/** 安全读属性（访问器可能抛错） */
+function safeGet(obj, key) {
+  try { return obj[key]; } catch { return undefined; }
+}
+
+/** 安全定义自有属性：冻结对象上失败也不抛 */
+function safeDefine(target, key, value) {
+  try {
+    Object.defineProperty(target, key, { value, writable: true, configurable: true, enumerable: true });
+    return true;
+  } catch { return false; }
+}
+
 function emit(event) {
   if (!state.onEvent || state.inEvent) return;
   state.inEvent = true;
@@ -280,7 +345,7 @@ function emit(event) {
 }
 
 function safeActor() {
-  try { return captureActor(); } catch { state.errors++; return 'unknown'; }
+  try { return captureActor(); } catch { bumpError('actor-capture'); return 'unknown'; }
 }
 
 function evaluateRules(event) {
@@ -327,7 +392,7 @@ function pushRedFlag(rule, event) {
 function preCheck(actor, api, target) {
   if (!state.beforeCall) return null;
   let d = null;
-  try { d = state.beforeCall(actor, api, target); } catch { state.errors++; return null; } // fail-safe：引擎异常放行
+  try { d = state.beforeCall(actor, api, target); } catch { bumpError('policy-before-call'); return null; } // fail-safe：引擎异常放行
   return d && d.action === 'block' ? d : null;
 }
 
@@ -335,6 +400,13 @@ function wrap(obj, key, api, targetFn, opts) {
   let orig;
   try { orig = obj[key]; } catch { return; }
   if (typeof orig !== 'function') return;
+  /**
+   * 双层包装防护（v0.3 发布门槛"不产生双层包装"）：
+   * 已被本探针包过的函数（带 __orig）不再包第二层。真机上两份探针副本
+   * 各自 install 会把 fs 包两层、__orig 指向包装器，导致记账自我递归
+   * （历史事故：27 万条/37MB）。这里把缺陷变成可观测计数，而不是静默叠加。
+   */
+  if (typeof orig.__orig === 'function') { state.doubleWrapped++; return; }
   const o = opts || {};
   obj[key] = function (...args) {
     // 跨层去重：http.request/get 内部会调用 net.createConnection，
@@ -349,7 +421,7 @@ function wrap(obj, key, api, targetFn, opts) {
         recordBlocked(api, target, actor, decision);
         throw new FirewallBlockError(decision.reason, { rule: decision.rule, api, target: String(target ?? '') });
       }
-      try { record(api, target, null, actor); } catch { state.errors++; }
+      try { record(api, target, null, actor); } catch { bumpError('record-hook'); }
     }
     if (o.parent) state.netParent++;
     state.inHook++;
@@ -361,6 +433,7 @@ function wrap(obj, key, api, targetFn, opts) {
     }
   };
   obj[key].__orig = orig;
+  state.hooked.set(api, (state.hooked.get(api) || 0) + 1);
 }
 
 /**
@@ -425,7 +498,7 @@ function simpleAppend(file, e) {
     const append = fs.appendFileSync.__orig || fs.appendFileSync;
     mkdir(p.dirname(file), { recursive: true });
     append(file, JSON.stringify(e) + '\n');
-  } catch { state.errors++; }
+  } catch { state.storeErrors++; }
 }
 
 /** 早期注册：枚举 node_modules 的每个包为插件（启动期 I/O 归因用） */
@@ -545,7 +618,7 @@ function installRegistryHookEarly() {
     Module._load.__pdrOrig = origLoad;
     return state.registryHooked;
   } catch {
-    state.errors++;
+    bumpError('early-load-interceptor');
     return false;
   }
 }
@@ -808,7 +881,7 @@ function hookRegistryClass(Registry) {
           wrapKind = 'class-skip';
           wrapped = plugin;
         } else if (typeof plugin === 'function') {
-          if (plugin.__pdrWrapped) { wrapKind = 'already'; return orig.call(this, plugin, config, getOuterStack); }
+          if (isPluginWrapped(plugin)) { wrapKind = 'already'; return orig.call(this, wrappedOf(plugin) ?? plugin, config, getOuterStack); }
           const fn = function (...args) { return als.run({ actor }, () => plugin.apply(this, args)); };
           /**
            * 注意：**不能**写 `fn.name = plugin.name`。本文件是 'use strict'，
@@ -819,26 +892,46 @@ function hookRegistryClass(Registry) {
            * 表现为"registry 里有它、事件全记成 host"。必须用 defineProperty。
            */
           try { Object.defineProperty(fn, 'name', { value: plugin.name, configurable: true }); } catch { /* 改名失败不影响包装 */ }
-          fn.inject = plugin.inject;
-          fn.Config = plugin.Config;
-          fn.__pdrWrapped = true;
-          fn.__pdrOrig = plugin;
+          safeDefine(fn, 'inject', safeGet(plugin, 'inject'));
+          safeDefine(fn, 'Config', safeGet(plugin, 'Config'));
+          safeDefine(fn, '__pdrWrapped', true);
+          safeDefine(fn, '__pdrOrig', plugin);
+          markWrapped(fn, plugin);
           wrapped = fn;
           wrapKind = 'fn';
         } else if (plugin && typeof plugin.apply === 'function') {
-          if (plugin.__pdrWrapped) { wrapKind = 'already'; return orig.call(this, plugin, config, getOuterStack); }
+          if (isPluginWrapped(plugin)) { wrapKind = 'already'; return orig.call(this, wrappedOf(plugin) ?? plugin, config, getOuterStack); }
           const origApply = plugin.apply;
-          wrapped = Object.create(plugin);
-          wrapped.apply = function (ctx, cfg) { return als.run({ actor }, () => origApply.call(this, ctx, cfg)); };
-          wrapped.inject = plugin.inject;
-          wrapped.Config = plugin.Config;
-          wrapped.__pdrWrapped = true;
-          wrapped.__pdrOrig = plugin;
+          /**
+           * 对象式插件用**浅克隆**包，而不是 Object.create + 赋值或 Proxy（v0.3 真机实证）：
+           *  - Object.create(plugin) 后给 `inject` 赋值：继承来的只读访问器在严格模式下抛
+           *    TypeError → 每插件记一次错误、包装全失败（实测 98 个插件、3127 条事件里
+           *    3121 条记成 host，归因整体失效）；
+           *  - Proxy 覆盖 `apply`：目标对象上 `apply` 常是非配置自有属性，
+           *    触发 Proxy 不变量错误（'get' on proxy: read-only and non-configurable …）。
+           * 浅克隆只读原对象、只写自己，冻结对象也能包。
+           */
+          const clone = {};
+          for (const key of Object.keys(plugin)) {
+            const value = safeGet(plugin, key);
+            if (value !== undefined) safeDefine(clone, key, value);
+          }
+          const wrappedApply = function (ctx, cfg) {
+            return als.run({ actor }, () => origApply.call(this ?? plugin, ctx, cfg));
+          };
+          safeDefine(clone, 'apply', wrappedApply);
+          safeDefine(clone, 'inject', safeGet(plugin, 'inject'));
+          safeDefine(clone, 'Config', safeGet(plugin, 'Config'));
+          safeDefine(clone, 'name', safeGet(plugin, 'name'));
+          safeDefine(clone, '__pdrWrapped', true);
+          safeDefine(clone, '__pdrOrig', plugin);
+          wrapped = clone;
+          markWrapped(plugin, clone);
           wrapKind = 'obj';
         }
         if (rec) rec.wrapKind = wrapKind;
       } catch (e) {
-        state.errors++;
+        bumpError('registry-wrap');
         if (rec) rec.wrapErr = String(e && e.message).slice(0, 140);
         wrapped = plugin; // 包失败就原样放过，绝不让宿主起不来
       }
@@ -852,7 +945,7 @@ function hookRegistryClass(Registry) {
     try { if (state.hookOrder < 0) state.hookOrder = state.registrations.length; } catch { /* 忽略 */ }
     return true;
   } catch {
-    state.errors++;
+    bumpError('registry-stack');
     return false;
   }
 }
@@ -865,14 +958,17 @@ function hookRegistryClass(Registry) {
 function boot(baseUrl, mode) {
   // 模式优先级：显式入参 > 环境变量 > state 默认（'als'）
   install({ mode: mode || process.env.PDR_PROBE_MODE || state.mode });
-  try { registerProfilePluginsFromBase(baseUrl); } catch { state.errors++; }
+  // 启动入口标记：预载路径已由 preload.cjs 先标记为 'preload'，这里只在
+  // 没有预载痕迹时兜底记 'bundle'（earlyInstall 的 !!js 调用就是这个路径）。
+  state.bootstrap = state.bootstrap || 'bundle';
+  try { registerProfilePluginsFromBase(baseUrl); } catch { bumpError('boot-register-profile'); }
   /**
    * 预载期就尝试挂钩：cordis 一被 require/import 立刻包住 RegistryService，
    * 保证 hook 早于**所有**插件实例化（profile 的 bundles 顺序我们改不了，
    * 真机上 pdr-probe-diag 排在 dsh-pdr-plugin 前面，晚挂就等于它全程不可归因）。
    * 拿不到也没关系，插件入口的 installRegistryHook 仍是兜底。
    */
-  try { installRegistryHookEarly(); } catch { state.errors++; }
+  try { installRegistryHookEarly(); } catch { bumpError('boot-early-hook'); }
   // 预载阶段拿不到 cordis（还没加载），真正的挂在插件入口用 ctx 反推（见 installRegistryHook）
   try {
     const home = process.env.DSH_HOME;
@@ -880,7 +976,7 @@ function boot(baseUrl, mode) {
       state.persistFile = require('node:path').join(home, 'firewall', 'events.jsonl');
       state.onEvent = (e) => simpleAppend(state.persistFile, e);
     }
-  } catch { state.errors++; }
+  } catch { bumpError('boot-persist'); }
   // 调试：记录注册结果（真机归因诊断用，稳定后可删）
   try {
     const home = process.env.DSH_HOME;
@@ -973,7 +1069,7 @@ function install(options) {
     wrap(tls, 'connect', 'tls.connect', (a) => normalizeNetTarget(a), { nestedSkip: true });
 
     const origFetch = globalThis.fetch;
-    if (typeof origFetch === 'function') {
+    if (typeof origFetch === 'function' && typeof origFetch.__orig !== 'function') {
       globalThis.fetch = function (input, init) {
         const url = typeof input === 'string' ? input : (input && input.url) || String(input);
         const actor = safeActor();
@@ -984,7 +1080,7 @@ function install(options) {
         }
         try {
           record('fetch', url, { method: (init && init.method) || 'GET' }, actor);
-        } catch { state.errors++; }
+        } catch { bumpError('binding-patch'); }
         // fetch 底层同步走 net.connect/tls.connect（真机实测），记为父调用，
         // 让嵌套的 socket 层不再重复记账——否则一次 fetch 落两条。
         state.netParent++;
@@ -995,6 +1091,9 @@ function install(options) {
         }
       };
       globalThis.fetch.__orig = origFetch;
+      state.hooked.set('fetch', (state.hooked.get('fetch') || 0) + 1);
+    } else if (typeof origFetch === 'function') {
+      state.doubleWrapped++;
     }
 
     // ★ 第二层：binding 层深 patch（M1 实证）——ESM 具名导入在 facade 创建时固化函数值，
@@ -1003,7 +1102,7 @@ function install(options) {
     try {
       const binding = process.binding('fs');
       const origRead = binding.readFileUtf8;
-      if (typeof origRead === 'function') {
+      if (typeof origRead === 'function' && typeof origRead.__orig !== 'function') {
         binding.readFileUtf8 = function (p) {
           // inHook：属性层已检查/记账的调用跳过（双层去重）；否则兜底检查+拦截
           if (!state.inHook) {
@@ -1013,13 +1112,15 @@ function install(options) {
               recordBlocked('fs.readFileUtf8', p, actor, decision);
               throw new FirewallBlockError(decision.reason, { rule: decision.rule, api: 'fs.readFileUtf8', target: String(p ?? '') });
             }
-            try { record('fs.readFileUtf8', p, null, actor); } catch { state.errors++; }
+            try { record('fs.readFileUtf8', p, null, actor); } catch { bumpError('binding-read'); }
           }
           return origRead.apply(this, arguments);
         };
+        binding.readFileUtf8.__orig = origRead;
+        state.hooked.set('fs.readFileUtf8', (state.hooked.get('fs.readFileUtf8') || 0) + 1);
       }
       const origOpen = binding.open;
-      if (typeof origOpen === 'function') {
+      if (typeof origOpen === 'function' && typeof origOpen.__orig !== 'function') {
         binding.open = function (p) {
           if (!state.inHook) {
             const actor = safeActor();
@@ -1028,17 +1129,19 @@ function install(options) {
               recordBlocked('fs.binding.open', p, actor, decision);
               throw new FirewallBlockError(decision.reason, { rule: decision.rule, api: 'fs.binding.open', target: String(p ?? '') });
             }
-            try { record('fs.binding.open', p, null, actor); } catch { state.errors++; }
+            try { record('fs.binding.open', p, null, actor); } catch { bumpError('binding-open'); }
           }
           const fd = origOpen.apply(this, arguments);
           try { if (typeof fd === 'number') state.fdPaths.set(fd, String(p)); } catch {}
           return fd;
         };
+        binding.open.__orig = origOpen;
+        state.hooked.set('fs.binding.open', (state.hooked.get('fs.binding.open') || 0) + 1);
       }
       // 写路径深 patch（真机实测：ESM facade 快照使 property 层失效，write 必须走 binding 兜底）
       for (const wname of ['writeFileUtf8', 'writeBuffer', 'writeString', 'writeBuffers']) {
         const origW = binding[wname];
-        if (typeof origW !== 'function') continue;
+        if (typeof origW !== 'function' || typeof origW.__orig === 'function') continue;
         binding[wname] = function (fdOrPath) {
           if (!state.inHook) {
             const actor = safeActor();
@@ -1049,12 +1152,14 @@ function install(options) {
               recordBlocked('fs.binding.' + wname, target, actor, decision);
               throw new FirewallBlockError(decision.reason, { rule: decision.rule, api: 'fs.binding.' + wname, target });
             }
-            try { record('fs.binding.' + wname, target, null, actor); } catch { state.errors++; }
+            try { record('fs.binding.' + wname, target, null, actor); } catch { bumpError('binding-write'); }
           }
           return origW.apply(this, arguments);
         };
+        binding[wname].__orig = origW;
+        state.hooked.set('fs.binding.' + wname, (state.hooked.get('fs.binding.' + wname) || 0) + 1);
       }
-    } catch { state.errors++; }
+    } catch { bumpError('binding-write-patch'); }
 
     // ★ 第三层：插件入口 runAs 包裹（ALS 归因的真正落点）
     // 前两层只解决"看到 I/O"，这一层解决"知道是谁"。没有它，插件入口不在 ALS 上下文里，
@@ -1065,7 +1170,7 @@ function install(options) {
     state.installed = true;
     return true;
   } catch (error) {
-    state.errors++;
+    bumpError('install');
     state.installed = false;
     return false; // fail-safe：安装失败不抛出
   }
@@ -1112,10 +1217,81 @@ function getStats() {
     dropped: state.droppedEvents,
     blocked: state.blockedCount,
     errors: state.errors,
+    storeErrors: state.storeErrors,
+    errorSites: Object.fromEntries(state.errorSites),
     registeredPlugins: [...state.plugins.values()],
     registryHooked: state.registryHooked,
     hookOrder: state.hookOrder,
+    // v0.3：健康状态判定所需的可核验事实
+    bootstrap: state.bootstrap,
+    preloadRan: state.preloadRan,
+    hooksWrapped: state.hooked.size,
+    doubleWrapped: state.doubleWrapped,
   };
+}
+
+/**
+ * Hook 覆盖矩阵（机器可读）。
+ *
+ * 只报告**实际包上的** API 数：没包上就是 0，不拿"设计上应该支持"当覆盖。
+ * 类别口径对齐路线图 §4.4（fs / fs.promises / child_process / http(s) / net+tls / fetch）。
+ */
+const COVERAGE_CATEGORIES = [
+  { id: 'fs', label: '文件系统（fs）', match: (api) => api.startsWith('fs.') && !api.startsWith('fs.promises.') },
+  { id: 'fs-promises', label: 'fs/promises', match: (api) => api.startsWith('fs.promises.') },
+  { id: 'child_process', label: '子进程（child_process）', match: (api) => api.startsWith('child_process.') },
+  { id: 'http', label: 'HTTP(S)', match: (api) => /^https?\./.test(api) },
+  { id: 'net', label: 'TCP / TLS', match: (api) => /^(net|tls)\./.test(api) },
+  { id: 'fetch', label: 'fetch', match: (api) => api === 'fetch' },
+];
+
+function getCoverage() {
+  const apis = [...state.hooked.keys()];
+  const categories = COVERAGE_CATEGORIES.map((c) => {
+    const hit = apis.filter((a) => c.match(a));
+    return { id: c.id, label: c.label, hooked: hit.length, apis: hit.slice(0, 24) };
+  });
+  return {
+    categories,
+    total: apis.length,
+    gaps: categories.filter((c) => c.hooked === 0).map((c) => c.id),
+    doubleWrapped: state.doubleWrapped,
+  };
+}
+
+/** 归因效果的可核验计数：事件都归给了谁 */
+function getAttribution() {
+  const byActor = Object.fromEntries(state.actorCounts);
+  const plugins = [...state.plugins.values()];
+  const nonHost = ['host', 'unknown', 'self'];
+  const seen = [...state.actorCounts.keys()].filter((a) => !nonHost.includes(a));
+  return {
+    total: state.totalEvents,
+    host: byActor.host || 0,
+    unknown: byActor.unknown || 0,
+    /**
+     * 归因成功的插件数 = **有事件的具名 actor 数**（直接证据）；
+     * 注册表大小只是"认出了哪些包"，不能当归因成绩——两者口径不同，
+     * 混用会出现"注册 2 个、实际归因 6 个"这种自相矛盾的数字。
+     */
+    pluginsAttributed: seen.length,
+    pluginsSeen: seen,
+    pluginsRegistered: plugins.length,
+    byActor,
+  };
+}
+
+/** 预载痕迹：preload.cjs 执行即调用（健康状态据此区分 FULL 与 PARTIAL） */
+function markPreload() {
+  state.preloadRan = true;
+  state.bootstrap = state.bootstrap || 'preload';
+  return state.preloadRan;
+}
+
+/** 记录探针是从哪个启动入口装进来的：'preload' | 'bundle' */
+function markBootstrap(kind) {
+  if (kind && !state.bootstrap) state.bootstrap = kind;
+  return state.bootstrap;
 }
 
 function reset() {
@@ -1124,6 +1300,7 @@ function reset() {
   state.totalEvents = 0;
   state.droppedEvents = 0;
   state.blockedCount = 0;
+  state.actorCounts = new Map();
 }
 
 /** 安装后补配（earlyInstall 先装、插件入口后补 onEvent 的场景） */
@@ -1150,12 +1327,19 @@ module.exports = {
   installRegistryHookEarly, // 预载期拦截 Module._load，cordis 一加载就挂钩
   hookRegistryClass, // 测试用：直接传入 RegistryService 类
   isRegistryHooked: () => state.registryHooked,
+  /** 该插件对象是否已被本探针包装（测试/诊断用；包装标记在 WeakSet 里，不写原对象） */
+  isPluginWrapped,
   getRegistrations: () => state.registrations.slice(), // 诊断：plugin() 入参形态
   setMode: (m) => { state.mode = m; },
   getEvents,
   getRedFlags,
   getSummary,
   getStats,
+  // v0.3 运行时可观测性（健康状态 / 覆盖矩阵 / 归因计数的数据来源）
+  getCoverage,
+  getAttribution,
+  markPreload,
+  markBootstrap,
   reset,
   FirewallBlockError,
 };

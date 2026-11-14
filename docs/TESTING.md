@@ -59,6 +59,13 @@ that cannot go red is not a signal.
 | `alert-push-eval.mjs` | 9 assertions: off by default, rule filtering, dedup, rate limiting, fail-safe, a silence-group control that proves no self-excitation, three payload formats, content minimisation |
 | `host-web-smoke.mjs` | 11 assertions: the `dsh-h3` adapter contract, verified with an injected runtime |
 
+### Runtime trust (v0.3)
+
+| File | Covers |
+|---|---|
+| `bootstrap-health-eval.mjs` | 21 assertions: FULL / PARTIAL / OFFLINE derivation — every degradation branch is triggered by its own evidence (no preload, no registry hook, late hook, coverage gap, dropped events, store errors, unwritable storage, probe errors, double wrapping, attribution not effective), the desktop adapter stays `degraded` rather than "supported", path masking keeps home / `DSH_HOME` out of the payload, the small-sample guard does not jump to conclusions, and a second probe copy cannot double-instrument |
+| `hook-matrix-eval.mjs` | the coverage matrix as an executable contract: five import styles × fs / fs.promises / child_process / http / fetch, each in a real child process with the real preload; the "reference captured before install" row asserts the *known* residual gap so it cannot be silently forgotten |
+
 ### Performance and baselines
 
 | File | Covers |

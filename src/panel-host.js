@@ -38,6 +38,38 @@ function failure(code, message) {
 
 export const EVENTS_ROUTE = '/api/dsh-pdr/events';
 export const OVERVIEW_ROUTE = '/api/dsh-pdr/overview';
+export const HEALTH_ROUTE = '/api/dsh-pdr/health';
+
+/** 探针单例上挂的运行时诊断函数（index.js 装配时注入） */
+let runtimeRef = null;
+/** runtime.json 快照刷新节流（面板每 5 秒轮询，不能让磁盘每分钟写 12 次） */
+let lastSnapshotAt = 0;
+const SNAPSHOT_MIN_INTERVAL_MS = 30_000;
+
+/**
+ * health 路由：运行环境 + 探针健康状态（FULL/PARTIAL/OFFLINE）+ Hook 覆盖矩阵
+ * + 启动入口能力矩阵。数据全部来自探针的实际计数，不含配置声明。
+ */
+function handleHealth() {
+  const api = apiRef;
+  if (!api) return failure('dsh-pdr/not-ready', 'firewall api not assembled yet');
+  let runtime = null;
+  try { runtime = typeof api.getRuntime === 'function' ? api.getRuntime() : null; } catch (e) {
+    return failure('dsh-pdr/runtime-error', String(e?.message ?? e));
+  }
+  if (!runtime) return failure('dsh-pdr/unsupported', 'this build does not expose runtime diagnostics');
+  // 顺带把快照刷新成"当前"状态（有节流）：doctor 读到的就不会只是会话开始那一刻
+  if (Date.now() - lastSnapshotAt >= SNAPSHOT_MIN_INTERVAL_MS && typeof api.refreshRuntime === 'function') {
+    try { api.refreshRuntime(); lastSnapshotAt = Date.now(); } catch { /* 快照失败不影响返回 */ }
+  }
+  return reply({
+    ok: true,
+    value: {
+      ...runtime,
+      bootstrapMatrix: typeof api.getBootstrapMatrix === 'function' ? api.getBootstrapMatrix() : [],
+    },
+  });
+}
 
 /** events 路由：query 从 POST body JSON 里取（actor/flag/q/limit，与 api-handlers 同语义）。
  * 结果按 t 倒序返回（面板直接渲染时间线），这是本路由的契约，不在客户端重复排序。 */
@@ -129,6 +161,7 @@ function mountNow(ctx) {
       return handleEvents(body);
     } }));
     disposers.push(register({ path: OVERVIEW_ROUTE, methods: ['POST'], requestBody: 'buffered', fetch: async () => handleOverview() }));
+    disposers.push(register({ path: HEALTH_ROUTE, methods: ['POST'], requestBody: 'buffered', fetch: async () => handleHealth() }));
     return () => { for (const d of disposers) { try { d(); } catch { /* 尽力撤销 */ } } };
   }, 'dsh-pdr-plugin: panel routes');
   return true;
@@ -142,7 +175,7 @@ function mountNow(ctx) {
  * （一分钟），服务出现即挂；期间面板显示"数据通道未接入"。
  */
 export function mountPanelRoutes(ctx) {
-  if (mountNow(ctx)) return { ok: true, routes: [EVENTS_ROUTE, OVERVIEW_ROUTE] };
+  if (mountNow(ctx)) return { ok: true, routes: [EVENTS_ROUTE, OVERVIEW_ROUTE, HEALTH_ROUTE] };
 
   let tries = 0;
   const timer = setInterval(() => {

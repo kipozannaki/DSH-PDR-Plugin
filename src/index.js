@@ -27,9 +27,13 @@ import { buildComplianceExport, toSarif, toCsv } from './report/compliance.js';
 import { aggregateSources, profileByActor, redLineSummary, aggregateMarkdown } from './report/aggregate.js';
 import { createAlertPusher } from './alert/push.js';
 import { bindFirewallApi, mountPanelRoutes } from './panel-host.js';
+import { collect as collectRuntime, writeRuntimeSnapshot, adapterMatrix } from './bootstrap/index.js';
 
 const req = createRequire(import.meta.url);
 const probe = req('./probe/probe-core.cjs');
+const PLUGIN_VERSION = (() => {
+  try { return req('../package.json').version ?? null; } catch { return null; }
+})();
 
 export const PLUGIN_NAME = 'dsh-pdr-plugin'; // 显示名 DSH-PDR-Plugin（npm 包名强制小写）
 // cordis 插件名与服务键（面板 client 半边按它 require 本包）
@@ -268,13 +272,39 @@ export default function firewallPlugin(ctx, config = {}) {
     /** 数据位置（本地优先，导出给用户自查） */
     dataDir,
     eventLogPath: store.path,
+    /**
+     * v0.3 运行时诊断（路线图 §4.2/§4.3）：启动入口、探针健康、
+     * Hook 覆盖矩阵、归因计数。全部来自探针的实际计数，不含配置声明。
+     */
+    getRuntime: () => runtime(),
+    /** 重算并落一份快照到 <dataDir>/runtime.json（doctor / 审计留档用） */
+    refreshRuntime: () => {
+      const r = runtime();
+      api.runtimeSnapshot = writeRuntimeSnapshot(r, dataDir, { probe });
+      return r;
+    },
+    /** 启动入口矩阵：哪些入口能注入、各自的限制（CLI/面板共用） */
+    getBootstrapMatrix: () => adapterMatrix(),
+    /** 插件版本（面板与 doctor 展示） */
+    pluginVersion: PLUGIN_VERSION,
   };
+
+  const runtime = () => collectRuntime({
+    probe,
+    dataDir,
+    pluginVersion: PLUGIN_VERSION,
+    profile: config.profile || process.env.PDR_PROFILE || null,
+  });
 
   // 4.5 行为监控面板：数据路由（connection.fetch 缝）+ client bundle 的数据源。
   // mountPanelRoutes 是重试式的：本插件 fiber 可能先于 connection 服务激活，
   // 服务就位后路由才挂上；期间面板显示"数据通道未接入"，主功能不受影响。
   bindFirewallApi(api);
   api.panelRoutes = mountPanelRoutes(ctx);
+
+  // 4.6 v0.3：落一份健康证据快照（<dataDir>/runtime.json）。
+  // 面板/doctor 都能回答"上次会话处于什么监控状态"，失败不影响监控主流程。
+  try { api.runtimeSnapshot = writeRuntimeSnapshot(runtime(), dataDir, { probe }); } catch { /* 快照失败不影响监控 */ }
 
   // 5. 宿主 web 挂载（fail-safe：异步尝试，dsh-h3 缺位/失败都不影响主功能）
   api.webMount = { ok: false, mode: 'pending' };

@@ -64,7 +64,7 @@ const panelHost = await import('../src/panel-host.js');
   const ctx = makeCtx();
   const r = panelHost.mountPanelRoutes(ctx);
   check('F', 'connection 在而数据未 bind：events 返回明确 not-ready',
-    r.ok === true && registered.length === 2,
+    r.ok === true && registered.length === 3,
     `routes=${registered.length}`);
   const evRoute = registered.find((x) => x.path === '/api/dsh-pdr/events');
   const res = await evRoute.fetch(new Request('http://x/api/dsh-pdr/events', { method: 'POST', body: '{}' }));
@@ -81,6 +81,19 @@ const api = {
   getRedFlags: () => probe.getRedFlags(),
   getVerdicts: () => [],
   getStats: () => ({ ...probe.getStats(), blocked: 0 }),
+  // v0.3：health 路由的数据面（真实实现来自 src/bootstrap，这里给稳定桩）
+  getRuntime: () => ({
+    schema: 'dsh-pdr/runtime/v1',
+    generatedAt: 1_700_000_000_000,
+    runtime: { node: 'v24.2.0', platform: 'win32', dshVersion: '0.2.1-rc.4', dshHome: '<DSH_HOME>' },
+    bootstrap: { adapter: 'launcher', label: 'dsh-pdr 启动器', supported: true, preloadRan: true },
+    probe: { installed: true, mode: 'als', registryHooked: true, hookOrder: 0, hooksWrapped: 51, dropped: 0, errors: 0, totalEvents: 10 },
+    coverage: { total: 51, gaps: [], categories: [{ id: 'fs', label: '文件系统（fs）', hooked: 22 }] },
+    attribution: { total: 10, host: 2, unknown: 0, pluginsRegistered: 1, pluginsAttributed: 1, pluginsSeen: ['panel-plg'] },
+    storage: { dataDir: '<DSH_HOME>/firewall', writable: true },
+    health: { state: 'FULL', reasons: [], checks: [] },
+  }),
+  getBootstrapMatrix: () => [{ id: 'launcher', label: 'dsh-pdr 启动器', supported: true }],
 };
 panelHost.bindFirewallApi(api);
 
@@ -100,10 +113,11 @@ await new Promise((r) => setTimeout(r, 250));
   const r = panelHost.mountPanelRoutes(ctx);
   const ev = registered.find((x) => x.path === '/api/dsh-pdr/events');
   const ov = registered.find((x) => x.path === '/api/dsh-pdr/overview');
-  check('A', '两条 POST 路由经 connection.fetch.register 注册，且包在 ctx.effect 里',
-    r.ok === true && registered.length === 2
+  const hl = registered.find((x) => x.path === '/api/dsh-pdr/health');
+  check('A', '三条 POST 路由经 connection.fetch.register 注册，且包在 ctx.effect 里',
+    r.ok === true && registered.length === 3
     && ev?.methods?.includes('POST') && ev?.requestBody === 'buffered'
-    && typeof ev?.fetch === 'function'
+    && typeof ev?.fetch === 'function' && typeof ov?.fetch === 'function' && typeof hl?.fetch === 'function'
     && effectsRan.includes('dsh-pdr-plugin: panel routes'),
     JSON.stringify(registered.map((x) => ({ p: x.path, m: x.methods }))));
 }
@@ -152,6 +166,25 @@ await new Promise((r) => setTimeout(r, 250));
     `panel-plg=${plg ? JSON.stringify(plg).slice(0, 140) : 'ABSENT — actors: ' + (j.value?.plugins ?? []).map((p) => p.name).join(',')}`);
 }
 
+// ---------- C2 health 路由（v0.3）：健康状态 + 覆盖矩阵 + 启动入口矩阵 ----------
+{
+  registered.length = 0;
+  const ctx = makeCtx();
+  panelHost.mountPanelRoutes(ctx);
+  const hl = registered.find((x) => x.path === '/api/dsh-pdr/health');
+  const res = await hl.fetch(new Request('http://x', { method: 'POST', body: '{}' }));
+  const j = await res.json();
+  const v = j.value ?? {};
+  check('C2', 'health 路由返回 FULL/PARTIAL/OFFLINE + 覆盖矩阵 + 入口矩阵',
+    j.ok === true
+    && ['FULL', 'PARTIAL', 'OFFLINE'].includes(v.health?.state)
+    && Array.isArray(v.coverage?.categories) && v.coverage.categories.length > 0
+    && Array.isArray(v.bootstrapMatrix) && v.bootstrapMatrix.length > 0
+    && typeof v.probe?.hooksWrapped === 'number'
+    && typeof v.attribution?.pluginsAttributed === 'number',
+    `state=${v.health?.state} cats=${v.coverage?.categories?.length} matrix=${v.bootstrapMatrix?.length}`);
+}
+
 // ---------- D actor 过滤透传（value 与 B 相同，是事件数组本身）----------
 {
   const ctx = makeCtx();
@@ -175,10 +208,14 @@ await new Promise((r) => setTimeout(r, 250));
 }
 
 // ---------- G/H client bundle ----------
+// 宿主形态（v0.3 起）：脚本顶层调用 window.__ModuleLoader__.load({id, factory})，
+// 宿主先收集 factory、首次 import 时再物化。这里如实模拟这两个阶段。
 {
   const src = readFileSync(path.join(HERE, '..', 'lib', 'client.js'), 'utf8');
   const loaded = [];
-  const factory = new Function('require', 'window', `return (${src})(require);`).bind(null, (spec) => {
+  const table = {};
+  const fakeWindow = { __ModuleLoader__: { load: (rec) => { table[rec.id] = rec.factory; } } };
+  const hostRequire = (spec) => {
     loaded.push(spec);
     if (spec === 'react') {
       return {
@@ -188,11 +225,18 @@ await new Promise((r) => setTimeout(r, 250));
       };
     }
     throw new Error('unexpected require: ' + spec);
-  });
-  const mod = factory();
+  };
+  // 阶段一：执行脚本（只应登记 factory，不应物化）
+  new Function('window', 'require', src)(fakeWindow, hostRequire);
+  const factory = table['dsh-pdr-plugin'];
+  check('G0', '脚本执行期即登记到宿主模块表（不是 IIFE 静默返回）',
+    typeof factory === 'function' && loaded.length === 0,
+    `registered=${typeof factory === 'function'} requiresAtExec=${loaded.length}`);
+
+  // 阶段二：物化 + apply
+  const mod = factory(hostRequire);
   const regs = [];
-  const mod2 = { name: mod.name, inject: mod.inject, apply: mod.apply };
-  mod2.apply({
+  mod.apply({
     slots: {
       inject: (name, cb) => cb(),
       register: (opts) => { regs.push(opts); return () => {}; },

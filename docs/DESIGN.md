@@ -97,13 +97,24 @@ was previously invisible — attributes its 7.
 
 ## Hook coverage (measured)
 
-| Consumption style | Layer 1 (property patch) | + Layer 2 (binding patch) |
-|---|---|---|
-| `require('node:…')` | ✅ | ✅ |
-| `import cp from 'node:…'` (default property lookup) | ✅ | ✅ |
-| `import * as ns from 'node:…'` | ✅ early / ❌ late | ✅ (fs) |
-| `import { fn } from 'node:…'` (named) | ✅ early / ❌ late | ✅ (fs) |
-| `globalThis.fetch` / `window.fetch` | ✅ (global lookup, no facade) | — |
+The matrix is now a **machine-checked test** (`test/hook-matrix-eval.mjs`), not prose: each
+consumption style runs in a real child process and the recorded event stream is asserted against a
+declared expectation table. When coverage changes in either direction, the test fails and forces the
+table to be updated.
+
+Measured on the current build — with the preload in place, every import style is covered:
+
+| Consumption style | fs sync | fs/promises | child_process | http | fetch |
+|---|---|---|---|---|---|
+| `require('node:…')` | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `import x from 'node:…'` (default) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `import * as ns from 'node:…'` (namespace) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| `import { fn } from 'node:…'` (named) | ✅ | ✅ | ✅ | ✅ | ✅ |
+| reference captured **before** install | ❌ | ✅ | ❌ | ✅ | ✅ |
+
+The last row is what "no preload" looks like: references snapshotted before hooks exist bypass the
+property patch, and there is no binding layer for `child_process`. That is exactly why the bootstrap
+adapter matters and why a late install is reported as `PARTIAL`, never as full coverage.
 
 `fs` and `fs.promises` are covered on both layers: 15 `fs.promises` methods and 16 `fs` methods,
 because real plugins call `mkdir` / `stat` / `copyFile` / `unlink` directly by name — wrapping only
@@ -111,12 +122,83 @@ four methods missed whole categories of writes.
 
 ### Honest residual gaps
 
-- named imports of `child_process` / `http` / `net` when the facade was created before the probe;
+- named imports of `child_process` / `http` / `net` when the facade was created before the probe
+  (measured above as the "captured before install" row);
 - native modules and `process.binding` used directly;
 - deliberate anti-instrumentation.
 
 Countering a determined adversary is a separate layer of work. This plugin's goal is
 **continuous, attributable visibility** — not a hostile-code sandbox.
+
+## Bootstrap adapters (v0.3)
+
+Injection is a property of the **launch entry**, not of the probe. `src/bootstrap/adapters.js`
+name-maps every entry we know about, with the evidence rule and the limitation stated up front:
+
+| Adapter | Supported | How the probe gets in |
+|---|---|---|
+| `launcher` | yes | `dsh-pdr` sets `NODE_OPTIONS=--require …/preload.cjs` and `PDR_BOOTSTRAP=launcher` |
+| `preload` | yes | a caller injects `--require` itself (build scripts, CI, wrappers) |
+| `desktop` | degraded | the process runs in the Desktop runtime; whether `--require` is possible depends on how it was started |
+| `bundle` | degraded | `cordis.patch.yml` `earlyInstall` only — no preload window |
+| `none` | no | nothing detected; the session is not monitored |
+
+Each verdict carries `evidence` (e.g. `env:PDR_BOOTSTRAP=launcher`), so a classification can always
+be traced back to a fact rather than a guess. `dsh-pdr --pdr-check` prints the same matrix offline.
+
+The bundle adapter keeps working because the entry now exports `Config`; a loader row with a
+`config:` block against a plugin without a schema fails activation silently — the failure mode that
+made the panel tab disappear in v0.2.4.
+
+## Probe health: why FULL / PARTIAL / OFFLINE
+
+`src/bootstrap/detect.js` derives the state from counters the probe actually maintains:
+
+- **OFFLINE** — `installed !== true`. Nothing was recorded; no runtime guarantee is offered.
+- **PARTIAL** — installed, but at least one *error-severity* check failed.
+- **FULL** — installed and every error-severity check passed.
+
+| Check | Severity | Evidence it reads |
+|---|---|---|
+| `probe-installed` | error | `state.installed` |
+| `preload-ran` | error | `markPreload()` called from `preload.cjs` |
+| `registry-hooked` | error | `RegistryService.plugin` wrapped |
+| `hook-order` | error | index of the first `plugin()` seen by the hook |
+| `coverage-complete` | error | categories with zero wrapped APIs |
+| `no-double-wrap` | error | second-layer wrap attempts rejected |
+| `storage-writable` | error | `access(W_OK)` on the event directory |
+| `no-store-errors` | error | JSONL append failures (multi-process contention) |
+| `no-probe-errors` | error | internal error counter, with **per-site tallies** |
+| `attribution-effective` | error | 20+ events, plugins registered, yet none attributed by name |
+| `adapter-supported` | error | adapter marked `degraded` or `false` |
+| `no-dropped-events` | **info** | bounded ring buffer rolled old events (disk keeps all) |
+
+Dropped events are deliberately *info*: the buffer is bounded on purpose and the JSONL store keeps
+everything, so counting it as degradation would make FULL unreachable in any long session — and an
+unreachable "full" is worse than no state at all.
+
+Every error site is labelled (`registry-wrap`, `record-hook`, `binding-read`, …) and surfaced as
+`errorSites` in the diagnostic object. A bare `errors: 98` is not actionable; "98 × `registry-wrap`"
+is what led to the v0.3 wrapping bug described below.
+
+## Attribution is ALS-first, and the seam must not mutate plugins
+
+The registry hook wraps `RegistryService.plugin` so every plugin's `apply` runs inside an ALS scope
+carrying its name. Two implementation traps, both found on a real host:
+
+1. **Function plugins** — assigning `fn.name` throws in strict mode (`name` is non-writable); use
+   `Object.defineProperty`.
+2. **Object plugins** — `Object.create(plugin)` followed by `wrapped.inject = …` throws when the
+   inherited property is a read-only accessor (ESM namespace objects, frozen plugin objects). The
+   throw was swallowed, so wrapping failed for *every* object plugin: 98 recorded errors, 3 127
+   events with 3 121 attributed to `host` — attribution silently off.
+
+   The fix is a shallow clone: read the plugin, write only to the clone (`safeDefine` per key), and
+   keep "already wrapped" in a `WeakSet` instead of mutating the plugin. Re-registration reuses the
+   cached wrapper so a reload does not fall back to the unwrapped object.
+
+Measured after the fix on the same profile: **14 named plugins attributed**, `errors: 0`.
+
 
 ## One logical call, one event
 

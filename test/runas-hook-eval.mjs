@@ -101,15 +101,19 @@ check('0', 'installRegistryHook 成功挂上 cordis Registry', hooked === true &
   const marker = path.join(HERE, '..', 'package.json');
   const plugin = { name: 'dup-plg', apply() { req('node:fs').readFileSync(marker, 'utf8'); } };
   await root.plugin(plugin);
-  const wrappedOnce = plugin.__pdrWrapped === true || plugin.apply.__pdrWrapped === true;
+  // v0.3：包装标记改为 WeakSet（不写原对象，冻结对象也能包），用公开判定函数
+  const wrappedOnce = probe.isPluginWrapped(plugin) === true;
   const root2 = new cordis.Context();
   await root2.plugin(plugin); // 同一个 plugin 对象再来一次（模拟 reload）
   await sleep(80);
   const evs = probe.getEvents({ limit: 200 });
   const mine = evs.filter((e) => e.actor === 'dup-plg');
   // 两次注册 → 两次 I/O；如果被重复包裹，事件数会翻倍成 4+
-  check('D', '同一 plugin 重复注册不产生重复包裹（事件数不翻倍）',
-    mine.length === 2, `events=${mine.length}（期望 2）wrappedFlag=${wrappedOnce}`);
+  // 且重复注册必须复用同一个包装体，否则第二次会退回未包装版本、归因丢失
+  const stillWrapped = probe.isPluginWrapped(plugin) === true;
+  check('D', '同一 plugin 重复注册不产生重复包裹（事件数不翻倍、包装体复用）',
+    mine.length === 2 && wrappedOnce && stillWrapped,
+    `events=${mine.length}（期望 2）wrappedOnce=${wrappedOnce} stillWrapped=${stillWrapped}`);
 }
 
 // ---------- E 构造器插件不被包坏 ----------

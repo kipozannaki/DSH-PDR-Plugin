@@ -51,6 +51,7 @@ function resolvePreload() {
  *
  *   dsh-pdr audit [--format sarif|csv|json|md] [--out FILE] [--data-dir DIR]
  *   dsh-pdr aggregate --source LABEL=DIR [--source ...] [--format json|md] [--out FILE]
+ *   dsh-pdr doctor [--json] [--data-dir DIR]   # 上次会话的监控健康状态（v0.3）
  */
 async function runSubcommand(cmd) {
   const argv = process.argv.slice(3);
@@ -75,6 +76,60 @@ async function runSubcommand(cmd) {
   };
 
   try {
+    /**
+     * doctor：回答"上次会话到底监控到什么程度"。
+     * 数据来自插件在 apply 时落的 <dataDir>/runtime.json（脱敏后），
+     * 没有活会话也能查——这正是长期留档的价值。
+     */
+    if (cmd === 'doctor') {
+      const file = path.join(dataDir, 'runtime.json');
+      let snapshot = null;
+      try { snapshot = JSON.parse(fs.readFileSync(file, 'utf8')); } catch { snapshot = null; }
+      if (!snapshot) {
+        const msg = `未找到运行时快照：${file}\n`
+          + '  说明：本机还没有用 dsh-pdr 启动过宿主，或插件的 apply 未执行。\n'
+          + '  先运行  dsh-pdr --profile <profile> web  让探针在真实会话里跑起来。';
+        if (argv.includes('--json')) emit(JSON.stringify({ ok: false, error: 'no-snapshot', path: file }, null, 2));
+        else emit(msg);
+        return 1;
+      }
+      const h = snapshot.health || { state: 'UNKNOWN', reasons: [] };
+      const rt = snapshot.runtime || {};
+      const boot = snapshot.bootstrap || {};
+      const probe = snapshot.probe || {};
+      const at = snapshot.attribution || {};
+      const cov = snapshot.coverage || {};
+      if (argv.includes('--json')) {
+        emit(JSON.stringify(snapshot, null, 2));
+        return 0;
+      }
+      const lines = [
+        `DSH-PDR 运行时健康  ${h.state}`,
+        `  快照时间   ${new Date(snapshot.generatedAt).toLocaleString()}`,
+        `  启动入口   ${boot.label || boot.adapter}（supported=${boot.supported}）`,
+        `  预载执行   ${boot.preloadRan ? '是' : '否'}`,
+        `  宿主版本   dsh ${rt.dshVersion || '?'} / node ${rt.node || '?'} / ${rt.platform || '?'}`,
+        `  探针       installed=${probe.installed} mode=${probe.mode} hooks=${probe.hooksWrapped}`,
+        `  归因       具名插件 ${at.pluginsAttributed || 0} · host ${at.host || 0} · unknown ${at.unknown || 0}`,
+        `  覆盖缺口   ${(cov.gaps || []).length ? cov.gaps.join(', ') : '无'}`,
+        `  事件       ${probe.totalEvents || 0} 条（丢弃 ${probe.dropped || 0}，错误 ${probe.errors || 0}）`,
+      ];
+      if ((h.reasons || []).length) {
+        lines.push('  缺口原因：');
+        for (const r of h.reasons) lines.push(`    - [${r.code}] ${r.zh || r.detail}`);
+      }
+      if ((h.notes || []).length) {
+        lines.push('  提示（不降级）：');
+        for (const r of h.notes) lines.push(`    - [${r.code}] ${r.zh || r.detail}`);
+      }
+      const sites = probe.errorSites && typeof probe.errorSites === 'object' ? Object.keys(probe.errorSites) : [];
+      if (sites.length) lines.push(`  错误站点   ${sites.map((k) => `${k}×${probe.errorSites[k]}`).join(', ')}`);
+      if (boot.evidence) lines.push(`  判定依据   ${boot.evidence}`);
+      if (boot.limitation) lines.push(`  入口限制：${boot.limitation}`);
+      emit(lines.join('\n'));
+      return h.state === 'OFFLINE' ? 1 : 0;
+    }
+
     if (cmd === 'audit') {
       const { aggregateSources, profileByActor, redLineSummary, aggregateMarkdown } = await import('../src/report/aggregate.js');
       const { toSarif, toCsv } = await import('../src/report/compliance.js');
@@ -134,25 +189,48 @@ async function runSubcommand(cmd) {
     console.error(`dsh-pdr ${cmd}: ${e && e.message}`);
     return 1;
   }
-  console.error(`dsh-pdr: 未知子命令 ${cmd}（可用：audit / aggregate）`);
+  console.error(`dsh-pdr: 未知子命令 ${cmd}（可用：audit / aggregate / doctor）`);
   return 1;
 }
 
-const SUBCOMMANDS = new Set(['audit', 'aggregate']);
+const SUBCOMMANDS = new Set(['audit', 'aggregate', 'doctor']);
 if (SUBCOMMANDS.has(process.argv[2])) {
   runSubcommand(process.argv[2]).then((code) => process.exit(code));
 } else {
 
 const PRELOAD = resolvePreload();
 
-// 自检模式：验证预载可用（dsh-pdr --pdr-check）
+/**
+ * 自检模式（v0.3 §4.2：CLI 自检）：不只报"预载文件在不在"，
+ * 还给出启动入口能力矩阵——用户能立刻看到 Desktop 这类入口为什么不支持。
+ */
 if (process.argv.includes('--pdr-check')) {
   const ok = fs.existsSync(PRELOAD);
+  let version = null;
+  try { version = JSON.parse(fs.readFileSync(path.resolve(HERE, '..', 'package.json'), 'utf8')).version; } catch { /* 版本读不到不影响自检 */ }
+  const i = args.indexOf('--profile');
+  const home = process.env.DSH_HOME
+    || path.join(process.env.USERPROFILE || process.env.HOME || '.', '.dsh');
+  const profile = i >= 0 ? args[i + 1] : (args[0] && !args[0].startsWith('-') && fs.existsSync(path.join(home, 'profiles', args[0])) ? args[0] : null);
+  const desktop = /dsh[-_ ]?tauri|deepseek[-_ ]?harness[-_ ]?desktop/i.test(String(process.execPath || '') + ' ' + String(process.argv[1] || ''));
   console.log(JSON.stringify({
+    schema: 'dsh-pdr/check/v1',
+    pluginVersion: version,
     preload: PRELOAD,
     exists: ok,
     nodeOptions: process.env.NODE_OPTIONS ?? '',
-    hint: ok ? '预载就绪；用 dsh-pdr <args> 启动即生效' : 'preload.cjs 缺失',
+    profile,
+    dshHome: (process.env.DSH_HOME || home).replace(process.env.USERPROFILE || process.env.HOME || '\u0000', '<home>'),
+    detectedAdapter: process.env.PDR_BOOTSTRAP ? 'launcher' : (desktop ? 'desktop' : (ok ? 'launcher(ready)' : 'none')),
+    adapters: [
+      { id: 'launcher', label: 'dsh-pdr 启动器', supported: true, injects: 'NODE_OPTIONS=--require preload.cjs' },
+      { id: 'preload', label: '外部 NODE_OPTIONS 预载', supported: true, injects: 'NODE_OPTIONS=--require preload.cjs' },
+      { id: 'desktop', label: 'DSH Desktop 内置启动器', supported: false, limitation: '桌面应用自行启动宿主，无法注入 NODE_OPTIONS' },
+      { id: 'bundle', label: 'bundle earlyInstall（晚装）', supported: 'degraded', limitation: '缺预载窗口，早于插件入口的 I/O 不可见' },
+    ],
+    hint: ok
+      ? '预载就绪。启动后用面板「行为监控」顶部横幅、或 `dsh-pdr doctor` 查看本次会话是否真的 FULL'
+      : 'preload.cjs 缺失：插件未完整安装',
   }, null, 2));
   process.exit(ok ? 0 : 1);
 }
@@ -168,10 +246,28 @@ const preloadPosix = PRELOAD.replace(/\\/g, '/');
 const nodeOptions = [process.env.NODE_OPTIONS, `--require "${preloadPosix}"`].filter(Boolean).join(' ');
 const dsh = process.env.DSH_PDR_DSH || 'dsh';
 
+/**
+ * v0.3 Bootstrap 标记：让宿主进程里的 Runtime Detector 能确证
+ * "是 dsh-pdr 启动器注入的"，而不是靠猜。PDR_PROFILE 供面板展示（脱敏）。
+ */
+const profileArg = (() => {
+  const i = args.indexOf('--profile');
+  if (i >= 0) return args[i + 1] || null;
+  const home = process.env.DSH_HOME || path.join(process.env.USERPROFILE || process.env.HOME || '.', '.dsh');
+  if (args[0] && !args[0].startsWith('-') && fs.existsSync(path.join(home, 'profiles', args[0]))) return args[0];
+  return null;
+})();
+
 const child = spawn(dsh, args, {
   stdio: 'inherit',
   shell: process.platform === 'win32', // Windows 用 cmd 解析 dsh.cmd；Unix 直接找 dsh
-  env: { ...process.env, NODE_OPTIONS: nodeOptions },
+  env: {
+    ...process.env,
+    NODE_OPTIONS: nodeOptions,
+    PDR_BOOTSTRAP: 'launcher',
+    PDR_PRELOAD_REQUESTED: '1',
+    ...(profileArg ? { PDR_PROFILE: profileArg } : {}),
+  },
 });
 
 child.on('error', (e) => {
